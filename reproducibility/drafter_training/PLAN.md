@@ -1,6 +1,6 @@
 # Plan: TLT with opportunistic drafter training on a 4-engine rollout topology
 
-Status: planned, not started (2026-09-28). Follows the 5-step frozen-drafter study in
+Status: spike test on DAPO in progress (2026-09-28). Follows the 5-step frozen-drafter study in
 [`../dataset/`](../dataset/README.md).
 
 ## Goal
@@ -41,6 +41,33 @@ Consequences to keep in mind when reading results:
 - TP=1 decodes a single request more slowly than TP=4, so tails are longer in wall-clock time.
 - **None of the 5-step numbers can serve as this experiment's baseline.** SD-off and frozen-drafter runs
   must be re-run on the new topology.
+
+## How drafter training runs (from the code)
+
+- **Hand-off to the engines:** the drafter lives as an FSDP module on every worker; at each rollout
+  wake-up, after the policy weights, its weights are pushed into every SGLang engine
+  (`update_drafter_weights` in `verl/workers/sharding_manager/fsdp_sglang.py`). A drafter trained during
+  step *k*'s tail is first used in step *k+1*.
+- **Training data:** on the step before a training step, the actor's old-log-prob pass also returns the
+  target model's hidden states (`collect_hidden_states_from_sgl=false`); the drafter trains on the
+  *previous* step's rollouts.
+- **Harvest is capped at `min_workers_for_training` GPUs.** Training starts once that many workers have
+  released their memory; once a session is active, later-released workers do not join
+  (`_check_and_start_training` returns early). With the default 1, at most one GPU trains; the other
+  finished GPUs stay idle until the straggler engine ends. Sensitivity run: `min_workers_for_training` 2 and 3
+  (more GPUs, later start). SysX, by contrast, can use every idle GPU.
+- A training session runs at most 200 loop iterations; a successful optimizer step advances the counter
+  twice (`_run_training_loop`), so a session does at most ~100 optimizer steps.
+
+## Implementation status (2026-09-28)
+
+- Launcher switches in `reproducibility/dataset/run_grpo_7B_4gpu.sh`: `ROLLOUT_TP` (default 4),
+  `DRAFTER_TRAIN`, `DRAFTER_INTERVAL`, `DRAFTER_MIN_WORKERS`; defaults leave the 5-step study unchanged.
+- Tracing: `worker_manager.py` emits `worker_released`, `worker_completed`, `drafter_train_session`
+  (with `optimizer_steps`) and `drafter_train_step` spans (wall clock, no device sync).
+- Outputs for this experiment: `OUT=reproducibility/drafter_training/outputs`.
+- Not yet done: analysis of 4-engine runs (the existing `analyze.py` reads GPU 0's engine as *the* engine;
+  with 4 engines the rollout ends at the last engine and each GPU has its own tail).
 
 ## Runs
 

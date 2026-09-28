@@ -67,6 +67,17 @@ def trace_span(name: str, gpu: bool = False, **attrs):
         f.flush()
 
 
+def emit_span(name: str, start: float, end: float, **attrs):
+    """Record an already-timed wall-clock span (no device sync); no-op unless tracing is on."""
+    if not _TRACE_DIR:
+        return
+    rec = {"src": "verl", "pid": os.getpid(), "rank": int(os.environ.get("RANK", -1)), "gpu_uuid": None,
+           "name": name, "start": start, "end": end, **attrs}
+    f = _get_file()
+    f.write(json.dumps(rec) + "\n")
+    f.flush()
+
+
 def traced_gpu_method(name: str):
     """Decorator recording a per-GPU span around a worker method."""
 

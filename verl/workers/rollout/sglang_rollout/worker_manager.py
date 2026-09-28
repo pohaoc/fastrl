@@ -14,6 +14,8 @@ import zmq.asyncio
 import zmq.error
 from torch.distributed.device_mesh import DeviceMesh
 
+from verl.utils.timeline_trace import emit_span
+
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
@@ -647,6 +649,8 @@ class RolloutDrafterManager:
             return True
 
         # Notify coordinator
+        now = time.time()
+        emit_span("worker_released", now, now, worker=worker_id, rl_step=self.current_rl_step)
         response = await self.worker_client.release_worker(worker_id)
 
         if response["status"] != "ok":
@@ -658,6 +662,8 @@ class RolloutDrafterManager:
 
     async def mark_worker_completed(self, worker_id: int):
         """Mark worker as completed generation."""
+        now = time.time()
+        emit_span("worker_completed", now, now, worker=worker_id, rl_step=self.current_rl_step)
         response = await self.worker_client.mark_completed(worker_id)
 
         if response["status"] == "ok":
@@ -717,6 +723,7 @@ class RolloutDrafterManager:
     async def _run_training_loop(self):
         """Simple linear training loop."""
         logger.debug(f"Worker {self.rank} training loop started")
+        session_start, optimizer_steps = time.time(), 0
 
         try:
             step = 0
@@ -734,10 +741,13 @@ class RolloutDrafterManager:
                     break
 
                 # Execute training step
+                step_start = time.time()
                 success = await asyncio.wait_for(
                     self.background_trainer.training_step(step),
                     timeout=20.0,
                 )
+                emit_span("drafter_train_step", step_start, time.time(), worker=self.rank, step=step, ok=bool(success))
+                optimizer_steps += int(bool(success))
 
                 step += 1
                 if success:
@@ -759,6 +769,8 @@ class RolloutDrafterManager:
             self._training_active = False
             # Signal that cleanup is complete
             self._training_cleanup_complete.set()
+            emit_span("drafter_train_session", session_start, time.time(), worker=self.rank,
+                      rl_step=self.current_rl_step, optimizer_steps=optimizer_steps)
             logger.debug(f"Worker {self.rank} training cleanup complete")
 
     async def _stop_training(self):

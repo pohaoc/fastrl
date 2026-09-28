@@ -13,6 +13,10 @@
 #     dapo  - DAPO-Math-17k deduplicated + AIME-2024 validation (prepare_dapo.py); same settings
 #     sql   - SkyRL-SQL-653 in the SkyRL-gym text2sql multi-turn env (prepare_sql.py);
 #             rollout and optimizer settings from granular-cais-rl sql_baseline.toml
+#   Optional (drafter-training experiment, see ../drafter_training/PLAN.md):
+#     ROLLOUT_TP=1        rollout engines of 1 GPU each (4 engines); default 4 = one 4-GPU engine
+#     DRAFTER_TRAIN=1     TLT opportunistic drafter training on released rollout workers
+#     DRAFTER_INTERVAL=10 train every N RL steps (TLT default 10); DRAFTER_MIN_WORKERS=1 (TLT default)
 # Differences from examples/grpo_7B.sh: 4 GPUs, total_training_steps=$STEPS, no checkpoints,
 # traces written to $FASTRL_TRACE_DIR.
 set -euo pipefail
@@ -43,7 +47,14 @@ export MKL_SERVICE_FORCE_INTEL=1
 
 CKPT_PATH=${CKPT_PATH:-$OUT/ckpt}
 PROJECT_NAME=FastRL
+ROLLOUT_TP=${ROLLOUT_TP:-4}
+DRAFTER_TRAIN=${DRAFTER_TRAIN:-0}
+DRAFTER_INTERVAL=${DRAFTER_INTERVAL:-10}
+DRAFTER_MIN_WORKERS=${DRAFTER_MIN_WORKERS:-1}
 EXPERIMENT_NAME=Qwen2.5-7B-4gpu-${DATASET}-sd_${SD}
+if [ "$ROLLOUT_TP" != 4 ] || [ "$DRAFTER_TRAIN" = 1 ]; then
+    EXPERIMENT_NAME=${EXPERIMENT_NAME}-tp${ROLLOUT_TP}-drafter${DRAFTER_TRAIN}
+fi
 MODEL_PATH=Qwen/Qwen2.5-7B
 SPEC_MODEL_PATH=mit-han-lab/Qwen2.5-7B-Eagle-RL
 
@@ -81,6 +92,14 @@ if [ "$DATASET" = sql ]; then
         "+actor_rollout_ref.rollout.skyrl_env.stop=['</sql>','</solution>']"
         +actor_rollout_ref.rollout.skyrl_env.max_env_workers=2048
         +actor_rollout_ref.rollout.skyrl_env.env_configs.text2sql.db_path=$REPO/SkyRL-SQL/db/data
+    )
+fi
+if [ "$DRAFTER_TRAIN" = 1 ]; then
+    EXTRA_ARGS+=(
+        speculative.train.enable_drafter_training=true
+        speculative.train.training_interval_steps=${DRAFTER_INTERVAL}
+        speculative.train.min_workers_for_training=${DRAFTER_MIN_WORKERS}
+        speculative.train.checkpoint_path=$OUT/$DATASET/drafter_ckpt/$EXPERIMENT_NAME
     )
 fi
 actor_ppo_max_token_len=$((max_prompt_length + max_response_length))
@@ -124,7 +143,7 @@ python3 -m verl.trainer.main_fastrl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP} \
     actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.mode=sync \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
