@@ -188,10 +188,11 @@ Overhead is negligible: the Eurus benchmark ran at 494/464 tokens/s traced vs 46
 | | Eurus-2-RL | DAPO-Math-17k | SkyRL-SQL-653 |
 | --- | --- | --- | --- |
 | Drafter acceptance, 32 prompts, batch size 1 | 6.4–6.9 | 5.65 | 3.67 |
-| Tail share of rollout (SD off) | 74–85% | 41–84% | pending |
-| Time SD saved vs plain decode, per step (s) | +40, −8, +102, +49, +29 | −30, +20, +6, +93, +3 | pending |
-| Straggler tokens per SD step, per step | 3.89, 2.66, 8.35, 6.41, 7.85 | 1.80, 5.31, 4.69, 8.94, 3.58 | pending |
-| Step-1 step time, SD off → on (s) | 395 → 320 | 250 → 194 | pending |
+| Tail share of rollout (SD off) | 74–85% | 41–84% | 3–12% |
+| Time SD saved vs plain decode, per step (s) | +40, −8, +102, +49, +29 | −30, +20, +6, +93, +3 | +0, −2, +3, −2, −1 |
+| Straggler tokens per SD step, per step | 3.89, 2.66, 8.35, 6.41, 7.85 | 1.80, 5.31, 4.69, 8.94, 3.58 | 4.10, 3.28, 4.59, 3.48, 3.60 |
+| Step-1 step time, SD off → on (s) | 395 → 320 | 250 → 194 | 421 → 430 |
+| 5-step total, SD off → on (s), overall speedup | 1,656 → 1,166, 1.42x | 748 → 655, 1.14x | 1,994 → 1,986, 1.00x |
 
 Findings:
 
@@ -207,7 +208,14 @@ Findings:
   DAPO step 4), which looks like repetitive output running to the length cap. Generated text was
   not saved, so this is unconfirmed.
 
-SkyRL-SQL results: pending (run in progress at the time of this checkpoint).
+- **SkyRL-SQL gets no end-to-end speedup (1.00x overall, rollout 1.01x).** Its tail is only 3–12% of the
+  rollout: 1,280 multi-turn trajectories keep the engine at its 512-request cap until the last 5–21 s.
+  In that short tail, the SD switch's re-prefill (2.3–3.2 s per step, larger than on Eurus because
+  multi-turn contexts are longer) cancels what speculation saves, and break-even is higher (3.0–3.3
+  tokens) because most SD steps run at 17–32 requests, where verification is costlier. For SQL the
+  straggler is its last turn's request, which hits the 3,000-token per-turn cap in every step.
+- **Throughput and end-to-end time disagree.** Averaged over the batch, SD saves time in every step on all
+  three datasets (`sd_cost.md`, `net_saved_s`); on the straggler, which bounds the step, it often does not.
 
 ## Environment
 
@@ -232,7 +240,7 @@ All in this working tree; none change behaviour unless the env vars / config key
 | File | Change |
 | --- | --- |
 | `third-party/sglang/python/sglang/srt/fastrl_trace.py` (new) | CUDA-event span tracer |
-| `third-party/sglang/python/sglang/srt/managers/scheduler.py` | `forward` spans; flush traces when idle |
+| `third-party/sglang/python/sglang/srt/managers/scheduler.py` | `forward` spans; flush traces when idle; plain decode preparation whenever adaptive SD is inactive (fixes a crash when a multi-turn running batch is rebuilt from a small prefill batch) |
 | `third-party/sglang/python/sglang/srt/speculative/eagle_worker.py` | EAGLE sub-phase spans, per-request verify data; `FASTRL_FORCE_PLAIN_DECODE` |
 | `verl/utils/timeline_trace.py` (new) | wall-clock spans |
 | `verl/utils/profiler/performance.py` | driver/worker timers emit spans |

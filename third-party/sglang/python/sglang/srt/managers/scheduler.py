@@ -2213,10 +2213,17 @@ class Scheduler(
         if batch.batch_size() < initial_bs:
             batch.batch_is_full = False
 
+        # While adaptive SD is not active, the EAGLE worker runs a plain decode step, so the batch
+        # needs plain decode preparation. Besides large batches, this covers a running batch rebuilt
+        # from a small prefill batch (spec_algorithm EAGLE) after it emptied, which happens in
+        # multi-turn rollouts when every live trajectory is between turns.
+        sd_inactive = self.draft_worker is not None and not getattr(
+            self.draft_worker, "adaptive_spec_enabled", True
+        )
         if (
             self.adaptive_spec_threshold is not None
             and self.adaptive_spec_threshold > 0
-            and batch.batch_size() > self.adaptive_spec_threshold
+            and (batch.batch_size() > self.adaptive_spec_threshold or sd_inactive)
         ):
             self.running_batch.spec_algorithm = SpeculativeAlgorithm.NONE
         batch.prepare_for_decode(skip_prepare=not self.running_batch.spec_algorithm.is_none())
