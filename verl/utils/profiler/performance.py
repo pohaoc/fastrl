@@ -144,7 +144,9 @@ def _timer(name: str, timing_raw: dict[str, float]):
         name (str): The name/identifier for this timing measurement.
         timing_raw (Dict[str, float]): Dictionary to store timing information.
     """
-    with Timer(name=name, logger=None) as timer:
+    from verl.utils.timeline_trace import trace_span
+
+    with trace_span(name, kind="timer"), Timer(name=name, logger=None) as timer:
         yield
     if name not in timing_raw:
         timing_raw[name] = 0

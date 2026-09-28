@@ -67,6 +67,10 @@ from sglang.srt.utils import (
 if is_cuda():
     from sgl_kernel import segment_packbits
 
+from sglang.srt.fastrl_trace import tracer as fastrl_tracer
+
+_FORCE_PLAIN_DECODE = os.environ.get("FASTRL_FORCE_PLAIN_DECODE", "0") == "1"
+
 logger = logging.getLogger(__name__)
 SGLANG_RETURN_ORIGINAL_LOGPROB = get_bool_env_var("SGLANG_RETURN_ORIGINAL_LOGPROB")
 
@@ -356,6 +360,10 @@ class EAGLEWorker(TpModelWorker):
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             return True
 
+        # Controlled baseline: identical engine and scheduling, but never speculate on decode.
+        if _FORCE_PLAIN_DECODE:
+            return False
+
         # For DECODE batches, check threshold with warmup
         current_enable_sd = False
         if batch_size <= self.adaptive_spec_threshold:
@@ -408,11 +416,15 @@ class EAGLEWorker(TpModelWorker):
             events["processing_start"].record()
 
         enable_sd = self.should_enable_sd(batch)
+        bs = batch.batch_size()
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
-            logits_output, next_token_ids, seq_lens_cpu = self.forward_target_extend(batch)
+            with fastrl_tracer.span("target_extend", bs=bs):
+                logits_output, next_token_ids, seq_lens_cpu = self.forward_target_extend(batch)
 
             if enable_sd:
-                with self.draft_tp_context(self.draft_model_runner.tp_group):
+                with self.draft_tp_context(self.draft_model_runner.tp_group), fastrl_tracer.span(
+                    "draft_extend", bs=bs
+                ):
                     self.forward_draft_extend(batch, logits_output.hidden_states, next_token_ids, seq_lens_cpu)
             return GenerationBatchResult(
                 logits_output=logits_output,
@@ -446,9 +458,14 @@ class EAGLEWorker(TpModelWorker):
                     )
 
                 try:
-                    batch_result = self.target_worker.forward_batch_generation(
-                        model_worker_batch
-                    )
+                    with fastrl_tracer.span("decode_nosd", bs=bs) as nosd_attrs:
+                        if fastrl_tracer.enabled and bs <= 32:
+                            # Per-request view of the tail, matching the verify spans of SD runs.
+                            nosd_attrs["rids"] = [r.rid for r in batch.reqs]
+                            nosd_attrs["out_len"] = [len(r.output_ids) for r in batch.reqs]
+                        batch_result = self.target_worker.forward_batch_generation(
+                            model_worker_batch
+                        )
                 finally:
                     if use_normal_graph:
                         self.target_worker.model_runner.attn_backend = old_attn
@@ -470,11 +487,27 @@ class EAGLEWorker(TpModelWorker):
             batch.spec_info.topk_p = batch.spec_info.topk_p[:, : self.topk]
             batch.spec_info.topk_index = batch.spec_info.topk_index[:, : self.topk]
 
-            with self.draft_tp_context(self.draft_model_runner.tp_group):
+            strategy = f"{self.speculative_num_steps}_{self.topk}_{self.speculative_num_draft_tokens}"
+            with self.draft_tp_context(self.draft_model_runner.tp_group), fastrl_tracer.span(
+                "draft", bs=bs, strategy=strategy
+            ):
                 spec_info = self.draft(batch)
-            logits_output, verify_output, model_worker_batch, can_run_cuda_graph = self.verify(batch, spec_info)
+            reqs = list(batch.reqs) if fastrl_tracer.enabled else None
+            with fastrl_tracer.span("verify", bs=bs, strategy=strategy) as verify_attrs:
+                logits_output, verify_output, model_worker_batch, can_run_cuda_graph = self.verify(batch, spec_info)
+                # Tokens emitted this step = accepted draft tokens + one bonus token per request.
+                verify_attrs["accepted"] = int(sum(verify_output.accept_length_per_req_cpu))
+                if reqs is not None and len(reqs) == len(verify_output.accept_length_per_req_cpu):
+                    # Per-request view (aligned with batch.reqs before finished requests are filtered),
+                    # used to follow the straggler that bounds rollout time.
+                    verify_attrs["rids"] = [r.rid for r in reqs]
+                    verify_attrs["acc"] = list(verify_output.accept_length_per_req_cpu)
+                    verify_attrs["out_len"] = [len(r.output_ids) for r in reqs]
+                    verify_attrs["fin"] = [int(r.finished()) for r in reqs]
 
-            with self.draft_tp_context(self.draft_model_runner.tp_group):
+            with self.draft_tp_context(self.draft_model_runner.tp_group), fastrl_tracer.span(
+                "draft_extend_after_decode", bs=bs
+            ):
                 # NOTE: We should use `check_forward_draft_extend_after_decode`
                 # when DP attention is enabled, but it is slow. Skip it for now.
                 if self.server_args.enable_dp_attention or batch.spec_info.verified_id.shape[0] > 0:

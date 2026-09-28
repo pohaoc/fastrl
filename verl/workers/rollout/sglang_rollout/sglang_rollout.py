@@ -20,6 +20,7 @@ import logging
 import multiprocessing as mp
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from json import JSONDecodeError
 from typing import Any, Optional
@@ -342,7 +343,13 @@ class SGLangRollout(BaseRollout):
                 raise ValueError(f"Cannot get pad_token_id from processing_class {self.processing_class}") from e
 
         self.drafter_manager = RolloutDrafterManager(device_mesh=self._device_mesh_cpu, rollout_config=self.config)
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # Python 3.12 + uvloop: no implicit loop in the main thread; create one so that
+            # later get_event_loop() calls in this worker reuse it.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         loop.run_until_complete(self.drafter_manager.initialize())
         self._training_check_task = None
         self._batch_completion_event = asyncio.Event()
@@ -609,9 +616,129 @@ class SGLangRollout(BaseRollout):
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
+        if self.config.get("skyrl_env", {}).get("enable", False):
+            return self._skyrl_env_generate_sequences(prompts, **kwargs)
         if self.config.multi_turn.enable:
             return self._req_level_generate_sequences(prompts, **kwargs)
         return self._batch_level_generate_sequences(prompts, **kwargs)
+
+    @GPUMemoryLogger(role="sglang rollout", logger=logger)
+    @torch.no_grad()
+    def _skyrl_env_generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+        """Multi-turn rollout through a SkyRL-gym text env (see skyrl_env_rollout.py).
+
+        The env reward is returned as ``rm_scores`` (placed on the last response token), so the
+        reward manager uses it as-is instead of re-scoring the decoded text.
+        """
+        from verl.utils.model import compute_position_id_with_mask
+        from verl.workers.rollout.sglang_rollout.skyrl_env_rollout import build_env_config, run_skyrl_trajectory
+
+        cfg = self.config.skyrl_env
+        tgt_device = prompts.batch["input_ids"].device
+        nt = prompts.non_tensor_batch
+        batch_size = len(nt["raw_prompt_ids"])
+        eos = prompts.meta_info["eos_token_id"]
+        eos_ids = set(eos if isinstance(eos, list | tuple) else [eos]) | {self.processing_class.eos_token_id}
+        is_validate = prompts.meta_info.get("validate", False)
+        sampling_params = self.sampling_params.copy()
+        if is_validate:
+            sampling_params.update(
+                top_k=self.config.val_kwargs.top_k,
+                top_p=self.config.val_kwargs.top_p,
+                temperature=self.config.val_kwargs.temperature,
+            )
+        sampling_params.update(kwargs)
+
+        if self._tp_rank == 0:
+            env_configs = build_env_config(cfg)
+            if not hasattr(self, "_skyrl_env_executor"):
+                self._skyrl_env_executor = ThreadPoolExecutor(max_workers=int(cfg.get("max_env_workers", 256)))
+
+            async def run_all():
+                return await asyncio.gather(
+                    *[
+                        run_skyrl_trajectory(
+                            self._engine,
+                            self.processing_class,
+                            list(nt["raw_prompt_ids"][i]),
+                            list(nt["raw_prompt"][i]),
+                            dict(nt["tools_kwargs"][i]),
+                            env_configs.get(nt["tools_kwargs"][i]["env_class"]),
+                            sampling_params,
+                            max_turns=int(cfg.max_turns),
+                            max_generate_length=int(cfg.max_generate_length),
+                            max_input_length=int(cfg.max_input_length),
+                            stop=list(cfg.stop),
+                            eos_ids=eos_ids,
+                            executor=self._skyrl_env_executor,
+                        )
+                        for i in range(batch_size)
+                    ]
+                )
+
+            loop = asyncio.get_event_loop()
+            trajectories = loop.run_until_complete(run_all())
+            loop.run_until_complete(self._engine.flush_cache())
+            # Same as the single-turn path (_generate_with_drafter): the sharding manager's __exit__
+            # is a no-op, so the rollout releases the engine's GPU memory before training.
+            if self.sharding_manager is not None:
+                loop.run_until_complete(self.sharding_manager.release_memory())
+        else:
+            trajectories = None
+        torch.cuda.empty_cache()
+
+        dist.barrier()
+        [trajectories] = broadcast_pyobj(
+            data=[trajectories],
+            rank=self._rank,
+            dist_group=self._device_mesh_cpu["tp"].get_group(),
+            src=self._device_mesh_cpu["tp"].mesh[0].item(),
+            force_cpu_device=False,
+        )
+
+        prompt_len, response_len = self.config.prompt_length, self.config.response_length
+        prompt_ids = [torch.tensor(list(p), dtype=torch.long) for p in nt["raw_prompt_ids"]]
+        resp_ids, resp_mask = [], []
+        rm_scores = torch.zeros(batch_size, response_len, dtype=torch.float32)
+        for i, t in enumerate(trajectories):
+            if len(t.response_ids) > response_len:
+                logger.warning(f"SkyRL trajectory {i} response {len(t.response_ids)} > {response_len}, truncating")
+            ids, mask = t.response_ids[:response_len], t.loss_mask[:response_len]
+            resp_ids.append(torch.tensor(ids, dtype=torch.long))
+            resp_mask.append(torch.tensor(mask, dtype=torch.long))
+            if ids:
+                rm_scores[i, len(ids) - 1] = t.reward
+
+        idx = pad_sequence(prompt_ids, batch_first=True, padding_value=self.pad_token_id, padding_side="left")
+        idx = pad_sequence_to_length(idx, prompt_len, self.pad_token_id, left_pad=True)
+        prompt_attn = (idx != self.pad_token_id).long()
+        for i, p in enumerate(prompt_ids):  # a prompt may legitimately contain the pad id
+            prompt_attn[i, -len(p) :] = 1
+        response = pad_sequence_to_length(
+            pad_sequence(resp_ids, batch_first=True, padding_value=self.pad_token_id), response_len, self.pad_token_id
+        )
+        response_mask = pad_sequence_to_length(pad_sequence(resp_mask, batch_first=True, padding_value=0), response_len, 0)
+        response_attn = torch.zeros_like(response)
+        for i, r in enumerate(resp_ids):
+            response_attn[i, : len(r)] = 1
+        attention_mask = torch.cat([prompt_attn, response_attn], dim=-1)
+        batch = TensorDict(
+            {
+                "prompts": idx,
+                "responses": response,
+                "response_mask": response_mask,
+                "input_ids": torch.cat([idx, response], dim=-1),
+                "attention_mask": attention_mask,
+                "position_ids": compute_position_id_with_mask(attention_mask),
+                "rm_scores": rm_scores,
+            },
+            batch_size=batch_size,
+        ).to(tgt_device)
+        non_tensor = {
+            "__num_turns__": np.array([t.num_turns for t in trajectories], dtype=np.int32),
+            "skyrl_env_reward": np.array([t.reward for t in trajectories], dtype=np.float32),
+        }
+        return DataProto(batch=batch, non_tensor_batch=non_tensor)
 
     @GPUMemoryLogger(role="sglang rollout", logger=logger)
     @torch.no_grad()

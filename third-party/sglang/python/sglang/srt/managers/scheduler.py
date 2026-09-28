@@ -191,6 +191,8 @@ from torch.cuda import Stream as CudaStream
 from torch.cuda import StreamContext as CudaStreamContext
 from torch.distributed import barrier
 
+from sglang.srt.fastrl_trace import tracer as fastrl_tracer
+
 logger = logging.getLogger(__name__)
 
 # Test retract decode for debugging purposes
@@ -1711,6 +1713,7 @@ class Scheduler(
             self.handle_embedding_request(tokenized_req)
 
     def self_check_during_idle(self):
+        fastrl_tracer.flush(reanchor=True)
         self.check_memory()
         self.check_tree_cache()
         self.new_token_ratio = self.init_new_token_ratio
@@ -2260,9 +2263,12 @@ class Scheduler(
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.default_stream)
                     self.future_map.resolve_future(model_worker_batch)
-                    batch_result = self.model_worker.forward_batch_generation(
-                        model_worker_batch
-                    )
+                    with fastrl_tracer.span(
+                        "forward", mode=batch.forward_mode.name, bs=bs, spec=False
+                    ):
+                        batch_result = self.model_worker.forward_batch_generation(
+                            model_worker_batch
+                        )
                     # FIXME(lsyin): maybe move this to forward_batch_generation
                     batch_result.copy_done = torch.get_device_module(
                         self.device
@@ -2294,9 +2300,16 @@ class Scheduler(
                     # Current implementation strictly synchronizes the seq_lens
                     batch.seq_lens = batch_result.next_draft_input.new_seq_lens
             else:
-                batch_result = self.model_worker.forward_batch_generation(
-                    batch_or_worker_batch
-                )
+                with fastrl_tracer.span(
+                    "forward",
+                    mode=batch.forward_mode.name,
+                    bs=batch.batch_size(),
+                    spec=not self.spec_algorithm.is_none(),
+                ) as span_attrs:
+                    batch_result = self.model_worker.forward_batch_generation(
+                        batch_or_worker_batch
+                    )
+                    span_attrs["accepted"] = int(batch_result.num_accepted_tokens or 0)
                 future_indices_or_next_token_ids = batch_result.next_token_ids
 
             # NOTE: future_indices_or_next_token_ids is used in ScheduleBatch,
