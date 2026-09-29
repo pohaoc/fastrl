@@ -99,6 +99,9 @@ if [ "$DRAFTER_TRAIN" = 1 ]; then
         speculative.train.enable_drafter_training=true
         speculative.train.training_interval_steps=${DRAFTER_INTERVAL}
         speculative.train.min_workers_for_training=${DRAFTER_MIN_WORKERS}
+        # The drafter only trains on hidden states returned by the SGLang engine during rollout;
+        # with the shipped default (false) its training step is skipped.
+        speculative.train.collect_hidden_states_from_sgl=true
         speculative.train.checkpoint_path=$OUT/$DATASET/drafter_ckpt/$EXPERIMENT_NAME
     )
 fi

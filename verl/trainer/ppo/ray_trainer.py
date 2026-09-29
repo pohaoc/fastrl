@@ -1201,10 +1201,16 @@ class RayPPOTrainer:
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
                         # Check if we should collect hidden states for drafter training
                         should_collect_for_drafter = False
+                        # Actor-side collection is opt-in: the drafter trains only on engine-collected
+                        # hidden states (collect_hidden_states_from_sgl=true; with false its training step
+                        # is skipped and this data is discarded), and these states are padded to the full
+                        # sequence length per sample (~120 GB per worker for 512 x 33K tokens), which
+                        # exhausts host RAM.
                         if (
                             hasattr(self.config, "speculative")
                             and self.config.speculative.get("enable", False)
                             and self.config.speculative.get("train", {}).get("enable_drafter_training", False)
+                            and self.config.speculative.get("train", {}).get("collect_hidden_states_from_actor", False)
                         ):
                             training_interval_steps = self.config.speculative.get("train", {}).get(
                                 "training_interval_steps", 1

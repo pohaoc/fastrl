@@ -1,6 +1,6 @@
 # Plan: TLT with opportunistic drafter training on a 4-engine rollout topology
 
-Status: spike test on DAPO blocked by a host-RAM OOM in drafter data collection (2026-09-29). Follows the 5-step frozen-drafter study in
+Status: host-RAM OOM in drafter data collection fixed, spike test to rerun (2026-09-29). Follows the 5-step frozen-drafter study in
 [`../dataset/`](../dataset/README.md).
 
 ## Goal
@@ -48,9 +48,9 @@ Consequences to keep in mind when reading results:
   wake-up, after the policy weights, its weights are pushed into every SGLang engine
   (`update_drafter_weights` in `verl/workers/sharding_manager/fsdp_sglang.py`). A drafter trained during
   step *k*'s tail is first used in step *k+1*.
-- **Training data:** on the step before a training step, the actor's old-log-prob pass also returns the
-  target model's hidden states (`collect_hidden_states_from_sgl=false`); the drafter trains on the
-  *previous* step's rollouts.
+- **Training data:** the SGLang engine returns the target model's hidden states during rollout
+  (`collect_hidden_states_from_sgl=true`, required: with false the drafter never trains), and
+  `collect_online_data` stores them; training draws from the current step and a cross-step buffer.
 - **Harvest is capped at `min_workers_for_training` GPUs.** Training starts once that many workers have
   released their memory; once a session is active, later-released workers do not join
   (`_check_and_start_training` returns early). With the default 1, at most one GPU trains; the other
@@ -75,6 +75,12 @@ The DAPO spike (4 x TP=1, interval 1) ran step 1's rollout (173 s) and started a
 engine as it finished, then died in step 1's old-log-prob pass when hidden states were collected for the
 drafter: host RAM hit 975 / 1,007 GB and Ray killed a worker. See `../notes/HANDOFF.md` for the hypothesis
 (padded full-length hidden states shipped through the driver) and the fix to make first.
+
+**Fix applied:** the drafter only trains when `collect_hidden_states_from_sgl=true` (the shipped default,
+false, silently skips every training step), and the actor-side hidden-state collection that caused the OOM is
+now opt-in. `DRAFTER_TRAIN=1` sets `collect_hidden_states_from_sgl=true`. This also means TLT's drafter data
+comes from the rollout engine, not the actor: update the "Training data" bullet above and the paper setup's
+`\todo`. Engine-side collection memory is not yet measured.
 
 ## Runs
 

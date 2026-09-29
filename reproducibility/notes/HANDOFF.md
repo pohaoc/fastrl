@@ -51,6 +51,20 @@ What was observed before it ended (step 1 of 3):
   unpadded (only valid tokens) and on the worker that computed them, or subsample sequences / cap
   `max_seq_len` (drafter config default 8192) before returning them. Measure host RAM during old-log-prob.
 
+- **Root cause found and fixed (2026-09-29, commit after a70d5da):**
+  - With FastRL's shipped default `collect_hidden_states_from_sgl=false`, **the drafter never trains**:
+    `EagleBackgroundTrainer._training_step_impl` returns early, and `DataBuffer` is created with
+    `store_hidden_states=collect_hidden_states_from_sgl`, so the actor-side hidden states are discarded.
+  - The OOM came from that discarded path: `dp_actor.compute_log_prob(return_hidden_states=True)` pads every
+    sample back to the full sequence length (~242 MB per DAPO sample, ~124 GB per worker because sequence
+    parallelism 4 gives each worker the whole batch), then ships them through the driver to every worker.
+  - Fix: `DRAFTER_TRAIN=1` now sets `collect_hidden_states_from_sgl=true` (the drafter trains on hidden states
+    the SGLang engine returns during rollout, via `collect_online_data`, which feeds both the cross-step buffer
+    and the current-step store), and the actor-side collection in `ray_trainer.py` is now opt-in
+    (`speculative.train.collect_hidden_states_from_actor`, default false).
+  - **Unverified:** memory of engine-side collection (SGLang returns per-token hidden states for each engine's
+    share of the batch). Watch host RAM during the first rollout of the rerun.
+
 Check after the rerun:
 
 1. Steps 2–3 run `drafter_train_session` spans with `optimizer_steps > 0`, and no traceback.
