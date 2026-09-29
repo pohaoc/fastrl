@@ -65,6 +65,21 @@ What was observed before it ended (step 1 of 3):
   - **Unverified:** memory of engine-side collection (SGLang returns per-token hidden states for each engine's
     share of the batch). Watch host RAM during the first rollout of the rerun.
 
+- **Rerun after the fix (spike2, DAPO, 4 x TP=1, interval 1): the drafter now trains.** Step 1 took 901 s
+  (rollout 823 s, old-log-prob 19 s, ref 11 s, update 47 s); host RAM peaked at 386 / 1,007 GB. Timeline from
+  step start (s): engines finished generating at 349 (w1), 419 (w2), 482 (w3), 622 (w0, the straggler).
+  After generating, each worker spent 98–208 s collecting the engine's hidden states before marking itself
+  complete (w0: 622 -> 811), which lands on the critical path for the straggler (~21% of the step).
+  Drafter sessions: w1 365–506 s (64 optimizer steps, hit the per-session cap), w0 627–772 s (51 steps).
+  w2 and w3 stayed idle after finishing (only one session at a time; no new session started when w1's
+  ended, because sessions start only on a release event), ~730 GPU-seconds unused.
+  For reference, DAPO step 1 with one 4-GPU engine took 194 s (SD on, no drafter training) / 250 s (SD off).
+  The rollout itself is much slower at TP=1 (straggler engine done at 622 s vs a 105 s rollout at TP=4);
+  a frozen-drafter TP=1 run is needed to separate topology from drafter-training cost.
+- Open issues for the full runs: (1) hidden-state collection time on the straggler (optimize or overlap it);
+  (2) idle released workers never join or restart training; (3) interval 1 was for the spike only: use TLT's
+  default 10 (collection runs only on the step before a training step).
+
 Check after the rerun:
 
 1. Steps 2–3 run `drafter_train_session` spans with `optimizer_steps > 0`, and no traceback.
