@@ -21,6 +21,7 @@
 #     DATA_ROOT=<dir>     directory holding Eurus-2-RL-Data/, DAPO-Math-17k/, SkyRL-SQL/ (default: repo root)
 #     RAY_NUM_CPUS=<n>    ray_init.num_cpus; required under Slurm, where Ray otherwise sizes itself to the node
 #     RAY_STOP=0          skip `ray stop --force` (it would kill other Ray jobs of the same user on a shared node)
+#     SPEC_MODEL_PATH=<d> EAGLE drafter (default mit-han-lab/Qwen2.5-7B-Eagle-RL), e.g. ../offline_drafter output
 #   Extra arguments are appended as Hydra overrides.
 # Differences from examples/grpo_7B.sh: 4 GPUs, total_training_steps=$STEPS, no checkpoints,
 # traces written to $FASTRL_TRACE_DIR.
@@ -62,7 +63,7 @@ if [ "$ROLLOUT_TP" != 4 ] || [ "$DRAFTER_TRAIN" = 1 ]; then
     EXPERIMENT_NAME=${EXPERIMENT_NAME}-tp${ROLLOUT_TP}-drafter${DRAFTER_TRAIN}
 fi
 MODEL_PATH=Qwen/Qwen2.5-7B
-SPEC_MODEL_PATH=mit-han-lab/Qwen2.5-7B-Eagle-RL
+SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-mit-han-lab/Qwen2.5-7B-Eagle-RL}   # or an offline-trained drafter (../offline_drafter)
 
 # Defaults = examples/grpo_7B.sh (Eurus, DAPO).
 train_prompt_bsz=64

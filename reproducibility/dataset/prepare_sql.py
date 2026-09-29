@@ -6,6 +6,8 @@ and writes verl-format parquets. Prompts are kept exactly as published (system t
 message). The SkyRL-gym ``text2sql`` env extras travel in ``extra_info.tools_kwargs``.
 
 Usage: python reproducibility/dataset/prepare_sql.py [--out SkyRL-SQL] [--raw SkyRL-SQL-raw]   (run from the repo root)
+       With --raw pointing at existing train/validation parquets and --zip at an existing OmniSQL data.zip,
+       nothing is downloaded.
 Then point ``text2sql.db_path`` at ``<out>/db/data``.
 """
 
@@ -48,17 +50,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="SkyRL-SQL")
     ap.add_argument("--raw", default="SkyRL-SQL-raw")
+    ap.add_argument("--zip", default=None, help="existing OmniSQL data.zip (skips the 22 GB download)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    snapshot_download("NovaSky-AI/SkyRL-SQL-653-data-newfmt", repo_type="dataset", local_dir=args.raw)
+    if not all(os.path.exists(os.path.join(args.raw, f"{s}.parquet")) for s in ("train", "validation")):
+        snapshot_download("NovaSky-AI/SkyRL-SQL-653-data-newfmt", repo_type="dataset", local_dir=args.raw)
     splits = {s: pd.read_parquet(os.path.join(args.raw, f"{s}.parquet")) for s in ("train", "validation")}
     for s, df in splits.items():
         to_verl(df, s).to_parquet(os.path.join(args.out, f"{s}.parquet"))
         print(f"{s}: {len(df)} rows, sources {df['data'].value_counts().to_dict()}")
 
     # Extract only the databases the data references (the full bundle is 22 GB compressed).
-    zip_path = hf_hub_download(
+    zip_path = args.zip or hf_hub_download(
         "seeklhy/OmniSQL-datasets", "data.zip", repo_type="dataset", local_dir=os.path.join(args.raw, "omnisql")
     )
     needed = {(r.data, r.db_id) for df in splits.values() for r in df.itertuples(index=False)}

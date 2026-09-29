@@ -157,7 +157,9 @@ class EagleDatasetGenerator:
             # Handle list of items
             for item in tqdm(ds, desc=f"[Rank{self.rank}] Processing list of items", position=self.rank):
                 if isinstance(item, dict):
-                    if "conversations" in item:
+                    if "input_ids" in item and "loss_mask" in item:
+                        self.create_tokenized_entry(item["input_ids"], item["loss_mask"])
+                    elif "conversations" in item:
                         self.process_conversation_item(item)
                     elif "messages" in item:
                         if isinstance(item["messages"], list):
@@ -308,6 +310,15 @@ class EagleDatasetGenerator:
         self.processed_dataset.append({"input_ids": input_ids, "loss_mask": loss_mask, "conversation": conversation})
 
         return True
+
+    def create_tokenized_entry(self, input_ids, loss_mask):
+        """Pre-tokenized row: loss_mask is 1 on tokens the model generated (the drafter's targets) and 0 on
+        prompt / environment-observation tokens. Truncated to max_len."""
+        input_ids = torch.as_tensor(list(input_ids), dtype=torch.long)[: self.max_len]
+        loss_mask = torch.as_tensor(list(loss_mask), dtype=torch.long)[: self.max_len]
+        assert len(input_ids) == len(loss_mask), "input_ids and loss_mask must have the same length"
+        if loss_mask.sum() > 0:
+            self.processed_dataset.append({"input_ids": input_ids, "loss_mask": loss_mask, "conversation": None})
 
     def format_conversation(self, prompt, response):
         """Format conversation from prompt/response pair"""

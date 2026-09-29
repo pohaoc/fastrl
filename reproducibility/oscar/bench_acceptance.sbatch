@@ -24,7 +24,8 @@ export DATASET=${DATASET:-dapo} TP=${TP:-1}
 export OUT=${OUT:-$RUN_ROOT/bench_acceptance/$SLURM_JOB_ID}
 mkdir -p "$OUT"
 
-echo "job=$SLURM_JOB_ID node=$(hostname) start=$(date) DATASET=$DATASET TP=$TP OUT=$OUT"
+echo "job=$SLURM_JOB_ID node=$(hostname) start=$(date) DATASET=$DATASET TP=$TP OUT=$OUT" \
+     "EAGLE_PATH=${EAGLE_PATH:-default} PROMPTS_PARQUET=${PROMPTS_PARQUET:-default}"
 echo "commit=$(git -C "$REPO" rev-parse HEAD)"; git -C "$REPO" status --short
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 python -c "import torch, sglang, verl; print('torch', torch.__version__, 'sglang', sglang.__file__, 'verl', verl.__file__)"

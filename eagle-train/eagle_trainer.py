@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import gc
+import glob
 import deepspeed
 import argparse
 
@@ -40,6 +41,9 @@ def add_args():
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training")
     parser.add_argument("--load_optimizer", action="store_true", help="Whether to load optimizer states")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp16", "bf16"], help="Training precision type")
+    parser.add_argument("--init_draft_path", type=str, default=None,
+                        help="EAGLE drafter directory (HF format, e.g. a Qwen2.5-7B-Eagle-RL snapshot) to fine-tune from")
+    parser.add_argument("--validate", action="store_true", help="Run validation after every epoch")
     parser = deepspeed.add_config_arguments(parser)
     return parser
 
@@ -212,7 +216,30 @@ class EagleTrainerDeepSpeed:
 
         # Load embeddings and LM head from base model
         self._load_base_model_weights()
+        if self.args.init_draft_path:
+            self._load_init_draft(self.args.init_draft_path)
         self.model.to(dtype=config.dtype)
+
+    def _load_init_draft(self, path):
+        """Initialise the trainable drafter weights (fc, decoder layer) from an existing EAGLE checkpoint."""
+        files = sorted(glob.glob(os.path.join(path, "*.safetensors")))
+        state = {}
+        if files:
+            for f in files:
+                with safe_open(f, framework="pt", device="cpu") as h:
+                    state.update({k: h.get_tensor(k) for k in h.keys()})
+        else:
+            state = torch.load(os.path.join(path, "pytorch_model.bin"), map_location="cpu", weights_only=True)
+        state = {(k if k.startswith(("model.", "lm_head")) else f"model.{k}"): v for k, v in state.items()}
+        # embed_tokens / lm_head stay the frozen target copies loaded from the base model
+        state = {k: v for k, v in state.items() if "embed_tokens" not in k and "lm_head" not in k}
+        missing, unexpected = self.model.load_state_dict(state, strict=False)
+        trainable = {n for n, p in self.model.named_parameters() if p.requires_grad}
+        not_loaded = sorted(trainable & set(missing))
+        if not_loaded or unexpected:
+            raise ValueError(f"init_draft_path {path}: trainable params not loaded {not_loaded}, unexpected {unexpected}")
+        if self.rank == 0:
+            logger.info(f"Initialised {len(state)} drafter tensors from {path}")
 
     def _load_base_model_weights(self):
         base_path = self.args.base_model_path
@@ -459,7 +486,8 @@ class EagleTrainerDeepSpeed:
                     tracking.log(metrics, step=global_step)
                     train_iter.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{(correct/total):.2%}", "epoch": epoch})
 
-            # self.validate(epoch, tracking)
+            if self.args.validate:
+                self.validate(epoch, tracking)
 
             client_state = {
                 "epoch": epoch,
