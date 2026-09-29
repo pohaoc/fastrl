@@ -17,6 +17,11 @@
 #     ROLLOUT_TP=1        rollout engines of 1 GPU each (4 engines); default 4 = one 4-GPU engine
 #     DRAFTER_TRAIN=1     TLT opportunistic drafter training on released rollout workers
 #     DRAFTER_INTERVAL=10 train every N RL steps (TLT default 10); DRAFTER_MIN_WORKERS=1 (TLT default)
+#   Optional (cluster use, see ../oscar/README.md):
+#     DATA_ROOT=<dir>     directory holding Eurus-2-RL-Data/, DAPO-Math-17k/, SkyRL-SQL/ (default: repo root)
+#     RAY_NUM_CPUS=<n>    ray_init.num_cpus; required under Slurm, where Ray otherwise sizes itself to the node
+#     RAY_STOP=0          skip `ray stop --force` (it would kill other Ray jobs of the same user on a shared node)
+#   Extra arguments are appended as Hydra overrides.
 # Differences from examples/grpo_7B.sh: 4 GPUs, total_training_steps=$STEPS, no checkpoints,
 # traces written to $FASTRL_TRACE_DIR.
 set -euo pipefail
@@ -26,6 +31,7 @@ SD=${SD:?set SD=on, off or stock}
 DATASET=${DATASET:?set DATASET=eurus, dapo or sql}
 STEPS=${STEPS:-5}
 OUT=${OUT:-$REPO/reproducibility/dataset/outputs}
+DATA_ROOT=${DATA_ROOT:-$REPO}
 case $SD in
   on) SPEC_ENABLE=true ;;
   off) SPEC_ENABLE=true; export FASTRL_FORCE_PLAIN_DECODE=1 ;;
@@ -33,9 +39,9 @@ case $SD in
   *) echo "SD must be on, off or stock"; exit 1 ;;
 esac
 case $DATASET in
-  eurus) DATA_PATH=Eurus-2-RL-Data ;;
-  dapo) DATA_PATH=DAPO-Math-17k ;;
-  sql) DATA_PATH=SkyRL-SQL ;;
+  eurus) DATA_PATH=$DATA_ROOT/Eurus-2-RL-Data ;;
+  dapo) DATA_PATH=$DATA_ROOT/DAPO-Math-17k ;;
+  sql) DATA_PATH=$DATA_ROOT/SkyRL-SQL ;;
   *) echo "DATASET must be eurus, dapo or sql"; exit 1 ;;
 esac
 export FASTRL_TRACE_DIR=${FASTRL_TRACE_DIR:-$OUT/$DATASET/traces/sd_$SD}
@@ -91,7 +97,7 @@ if [ "$DATASET" = sql ]; then
         +actor_rollout_ref.rollout.skyrl_env.max_input_length=8192
         "+actor_rollout_ref.rollout.skyrl_env.stop=['</sql>','</solution>']"
         +actor_rollout_ref.rollout.skyrl_env.max_env_workers=2048
-        +actor_rollout_ref.rollout.skyrl_env.env_configs.text2sql.db_path=$REPO/SkyRL-SQL/db/data
+        +actor_rollout_ref.rollout.skyrl_env.env_configs.text2sql.db_path=$DATA_PATH/db/data
     )
 fi
 if [ "$DRAFTER_TRAIN" = 1 ]; then
@@ -105,11 +111,16 @@ if [ "$DRAFTER_TRAIN" = 1 ]; then
         speculative.train.checkpoint_path=$OUT/$DATASET/drafter_ckpt/$EXPERIMENT_NAME
     )
 fi
+if [ -n "${RAY_NUM_CPUS:-}" ]; then
+    EXTRA_ARGS+=(ray_init.num_cpus=${RAY_NUM_CPUS})
+fi
 actor_ppo_max_token_len=$((max_prompt_length + max_response_length))
 infer_ppo_max_token_len=$((max_prompt_length + max_response_length))
 
-ray stop --force
-sleep 3
+if [ "${RAY_STOP:-1}" = 1 ]; then
+    ray stop --force
+    sleep 3
+fi
 
 python3 -m verl.trainer.main_fastrl \
     speculative.eagle.spec_model_path=$SPEC_MODEL_PATH \
@@ -170,4 +181,5 @@ python3 -m verl.trainer.main_fastrl \
     trainer.test_freq=-1 \
     trainer.total_epochs=${total_epochs} \
     trainer.total_training_steps=${STEPS} \
-    "${EXTRA_ARGS[@]}"
+    "${EXTRA_ARGS[@]}" \
+    "$@"

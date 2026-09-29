@@ -104,6 +104,10 @@ A (SD off), B (frozen drafter), C (full TLT) on DAPO, then Eurus.
 
 ## Environment (rebuild notes)
 
+**Resuming on Oscar (2026-09-28):** use [`../oscar/`](../oscar/README.md). It reuses the `fastrl` conda env
+(editable installs of this checkout), 4x H100 on `gpu-he`, data and outputs on scratch. The first Oscar job is
+the frozen-drafter diagnostic above (`SD=on DATASET=dapo STEPS=1 ROLLOUT_TP=1 DRAFTER_TRAIN=0`).
+
 See [`claude_memory/fastrl-env-setup.md`](claude_memory/fastrl-env-setup.md) and the Environment section of
 [`../dataset/README.md`](../dataset/README.md): CUDA 12.8 toolkit, flashinfer 0.4.0 built against
 apache-tvm-ffi 0.1.0b15 from commit `7092774`, flash-attn with `--no-deps`, numpy<2, skyrl-gym 0.3.0 for SQL.
