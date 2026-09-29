@@ -7,6 +7,7 @@ The artifact was built on a 4x H100 (95 GB) machine with a `.venv`. On Oscar, th
 | --- | --- |
 | `env.sh` | Loads CUDA, puts the `fastrl` conda env on `PATH`, and sets `HF_HOME`, `DATA_ROOT` and `RUN_ROOT` on scratch |
 | `prepare_data.sbatch` | One-off job (CPU). Builds `$DATA_ROOT/DAPO-Math-17k` (deduplicated) and links `$DATA_ROOT/Eurus-2-RL-Data` to the full Eurus data |
+| `bench_acceptance.sbatch` | Standalone drafter acceptance (`../dataset/bench_acceptance.sh`) on 1x H100 in `gpu-debug`, default DAPO at TP=1. A quick check of the env and SD on Oscar |
 | `grpo.sbatch` | One launcher run on `--gres=gpu:h100:4`. Also logs host RAM and GPU samples, and keeps Ray's logs if the run fails |
 
 ## Oscar-specific settings (and why)
