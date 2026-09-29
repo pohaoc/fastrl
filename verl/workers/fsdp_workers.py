@@ -121,6 +121,36 @@ def get_sharding_strategy(device_mesh):
     return sharding_strategy
 
 
+def _resolve_hf_model_dir(path):
+    """Return a local directory for a model path or a Hugging Face repo id (via the HF cache)."""
+    if not path or os.path.exists(path):
+        return path
+    from huggingface_hub import snapshot_download
+
+    try:
+        return snapshot_download(path)
+    except Exception as e:  # not a repo id, or not cached while offline
+        logger.warning(f"Could not resolve {path!r} to a local model directory: {e}")
+        return path
+
+
+def _load_named_tensors(model_dir, names):
+    """Load the named tensors from a safetensors checkpoint directory (sharded or not)."""
+    index = os.path.join(model_dir, "model.safetensors.index.json")
+    if os.path.exists(index):
+        weight_map = json.load(open(index))["weight_map"]
+        files = sorted({weight_map[n] for n in names if n in weight_map})
+    else:
+        files = [os.path.basename(f) for f in glob.glob(os.path.join(model_dir, "*.safetensors"))]
+    out = {}
+    for fn in files:
+        with safetensors.safe_open(os.path.join(model_dir, fn), framework="pt", device="cpu") as f:
+            for n in names:
+                if n in f.keys():
+                    out[n] = f.get_tensor(n)
+    return out
+
+
 class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     """
     This worker can be instantiated as a standalone actor or a standalone rollout or a standalone reference policy
@@ -518,6 +548,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         drafter_module = model_class(config=config).cuda()
 
+        # spec_model_path is usually a Hugging Face repo id (as for SGLang's speculative_draft_model_path);
+        # resolve it to the local snapshot, or the checkpoint below is skipped and the drafter stays random.
+        spec_model_path = _resolve_hf_model_dir(spec_model_path)
+        loaded_keys = set()
+
         # Initialize eagle model
         if spec_model_path and os.path.exists(spec_model_path):
             logger.info(f"Loading eagle model from checkpoint: {spec_model_path}")
@@ -553,8 +588,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             del state
 
             drafter_module.load_state_dict(renamed_checkpoint, strict=False)
+            loaded_keys = set(renamed_checkpoint)
+            logger.info(f"Loaded {len(loaded_keys)} drafter tensors from {spec_model_path}")
         else:
-            logger.info("Initialized eagle model from scratch")
+            logger.warning(f"Drafter checkpoint {spec_model_path!r} not found: initialized eagle model from scratch")
 
         base_module = self.actor_module_fsdp.unshard()
         if hasattr(base_module, "lm_head"):
@@ -570,6 +607,23 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             logger.info("Successfully load embed_tokens for drafter model")
 
         del base_module
+
+        shared = {"lm_head.weight": drafter_module.lm_head.weight.requires_grad is False,
+                  "model.embed_tokens.weight": drafter_module.model.embed_tokens.weight.requires_grad is False}
+        missing = [k for k, ok in shared.items() if not ok and k not in loaded_keys]
+        if missing:
+            target_dir = _resolve_hf_model_dir(self.config.model.path)
+            tensors = _load_named_tensors(target_dir, missing)
+            not_found = [k for k in missing if k not in tensors]
+            if not_found:
+                raise ValueError(f"Drafter weights {not_found} not in drafter checkpoint or target model {target_dir}")
+            with torch.no_grad():
+                for k, v in tensors.items():
+                    drafter_module.get_parameter(k).copy_(v)
+            logger.info(f"Loaded {missing} for the drafter from target model {target_dir}")
+        # Frozen, as when shared from the actor: the drafter trains its own layer and fc only.
+        for p in list(drafter_module.lm_head.parameters()) + list(drafter_module.model.embed_tokens.parameters()):
+            p.requires_grad = False
 
         # Apply FSDP2
         fsdp_config = self.config.actor.fsdp_config

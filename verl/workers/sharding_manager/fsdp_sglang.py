@@ -253,6 +253,12 @@ class FSDPSGLangShardingManager(BaseShardingManager):
             # Convert weight keys to match the drafter model config
             drafter_module_unwrapped = getattr(self.drafter_module, "_fsdp_wrapped_module", self.drafter_module)
             drafter_params = convert_weight_keys(drafter_params, drafter_module_unwrapped)
+            # SGLang's EAGLE draft model shares embed_tokens and lm_head with the target model
+            # (EAGLEWorker -> set_embed_and_head), and loading embed_tokens into the draft model writes
+            # into the target's embedding. Both are frozen in the drafter, so never send them.
+            drafter_params = {
+                k: v for k, v in drafter_params.items() if "embed_tokens" not in k and "lm_head" not in k
+            }
 
             if self.offload_param:
                 offload_fsdp_model_to_cpu(self.drafter_module)
