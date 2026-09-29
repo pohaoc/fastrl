@@ -74,6 +74,10 @@ class DataBuffer:
         """Increment the current RL step counter."""
         self._current_step += 1
 
+    def set_step(self, step: int):
+        """Set the current RL step counter (the trainer's global step)."""
+        self._current_step = step
+
     def get_all_data(self) -> list[dict[str, torch.Tensor]]:
         """Get all data from the buffer.
 

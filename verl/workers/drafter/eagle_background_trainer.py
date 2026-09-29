@@ -615,6 +615,10 @@ class EagleBackgroundTrainer:
         trainable_state = self._get_trainable_state_dict()
         return {k: v.detach().cpu() for k, v in trainable_state.items() if v.requires_grad}
 
+    def set_rl_step(self, step: int):
+        """Set the RL step counter in the data buffer."""
+        self.data_buffer.set_step(step)
+
     def increment_rl_step(self):
         """Increment the RL step counter in the data buffer.
 

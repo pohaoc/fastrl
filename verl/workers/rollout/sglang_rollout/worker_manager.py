@@ -494,6 +494,12 @@ class RolloutDrafterManager:
             return False
         return (self.current_rl_step + 1) % self.training_interval_steps == 0
 
+    def set_rl_step(self, step: int):
+        """Set the RL step counter to the trainer's global step."""
+        self.current_rl_step = step
+        if self.background_trainer is not None:
+            self.background_trainer.set_rl_step(step)
+
     def increment_rl_step(self):
         """Increment the RL step counter."""
         self.current_rl_step += 1

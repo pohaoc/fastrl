@@ -616,6 +616,12 @@ class SGLangRollout(BaseRollout):
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
+        # The drafter-training schedule (should_train_this_step / should_collect_data_this_step) keys off
+        # the RL step. Nothing calls increment_rl_step, so take it from the trainer, which passes its
+        # global step with every training batch; validation batches carry none and leave it unchanged.
+        global_steps = prompts.meta_info.get("global_steps")
+        if global_steps is not None and self.drafter_manager is not None:
+            self.drafter_manager.set_rl_step(global_steps)
         if self.config.get("skyrl_env", {}).get("enable", False):
             return self._skyrl_env_generate_sequences(prompts, **kwargs)
         if self.config.multi_turn.enable:
