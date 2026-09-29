@@ -1,6 +1,6 @@
 # Plan: TLT with opportunistic drafter training on a 4-engine rollout topology
 
-Status: spike test on DAPO in progress (2026-09-28). Follows the 5-step frozen-drafter study in
+Status: spike test on DAPO blocked by a host-RAM OOM in drafter data collection (2026-09-29). Follows the 5-step frozen-drafter study in
 [`../dataset/`](../dataset/README.md).
 
 ## Goal
@@ -68,6 +68,13 @@ Consequences to keep in mind when reading results:
 - Outputs for this experiment: `OUT=reproducibility/drafter_training/outputs`.
 - Not yet done: analysis of 4-engine runs (the existing `analyze.py` reads GPU 0's engine as *the* engine;
   with 4 engines the rollout ends at the last engine and each GPU has its own tail).
+
+## Spike test result (2026-09-29): blocked by host-RAM OOM
+
+The DAPO spike (4 x TP=1, interval 1) ran step 1's rollout (173 s) and started a drafter session on each
+engine as it finished, then died in step 1's old-log-prob pass when hidden states were collected for the
+drafter: host RAM hit 975 / 1,007 GB and Ray killed a worker. See `../notes/HANDOFF.md` for the hypothesis
+(padded full-length hidden states shipped through the driver) and the fix to make first.
 
 ## Runs
 

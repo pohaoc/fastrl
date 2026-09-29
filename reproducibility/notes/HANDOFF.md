@@ -42,6 +42,15 @@ What was observed before it ended (step 1 of 3):
   data yet (it is collected during each step's old-log-prob pass). Note: the "one training GPU" limit only
   holds while a session is active; once a session ends, the next released worker can start a new one.
 
+- **The run then died at the end of step 1 with host-RAM exhaustion** (Ray: node at 975 / 1,007 GB, worker
+  killed) inside the old-log-prob pass that returns hidden states for the drafter
+  (`batch.meta_info["return_hidden_states"]`, `ray_trainer.py` ~line 1215); the drafter buffer never got data.
+  Hypothesis (unverified): `dp_actor.py` re-pads the last-layer hidden states to (batch, seq_len, hidden), i.e.
+  512 x ~33K x 3584 x 2 bytes ≈ 120 GB per worker for DAPO, and they are returned through Ray to the driver and
+  sent back to every worker (`add_drafter_data_to_buffer`). **Fix this before the rerun**: keep hidden states
+  unpadded (only valid tokens) and on the worker that computed them, or subsample sequences / cap
+  `max_seq_len` (drafter config default 8192) before returning them. Measure host RAM during old-log-prob.
+
 Check after the rerun:
 
 1. Steps 2–3 run `drafter_train_session` spans with `optimizer_steps > 0`, and no traceback.
