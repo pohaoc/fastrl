@@ -76,6 +76,18 @@ What was observed before it ended (step 1 of 3):
   For reference, DAPO step 1 with one 4-GPU engine took 194 s (SD on, no drafter training) / 250 s (SD off).
   The rollout itself is much slower at TP=1 (straggler engine done at 622 s vs a 105 s rollout at TP=4);
   a frozen-drafter TP=1 run is needed to separate topology from drafter-training cost.
+- **Step 2 finished (678 s; rollout 615 s), but SD accepted nothing in either step:** mean 1.00 token per SD step
+  (bonus token only) on all four engines, over 29,008 (step 1) and 24,195 (step 2) SD steps. The same drafter
+  averaged 4–6 tokens per step at TP=4 without drafter training. Speculation was pure overhead, which likely
+  explains most of the slow TP=1 rollout. Host RAM peaked at 521 GB. Drafter sessions in step 2: one, on w0
+  (112 s, 100 optimizer steps).
+  **Top suspect:** with drafter training on, every wake-up pushes the trainer's FSDP drafter module into the
+  engines (`update_drafter_weights` in `fsdp_sglang.py`, called from `wake_up`), including before any training
+  in step 1, and acceptance is already 1.00 in step 1. So the pushed weights are probably wrong (drafter module
+  not loaded from `spec_model_path`, key names from `convert_weight_keys` not matching the engine's draft model,
+  or dtype). **First thing to do next:** run 1 step with `ROLLOUT_TP=1 DRAFTER_TRAIN=0` (frozen drafter, no push).
+  If acceptance is normal (4–6), the push is the bug: compare the engine's draft weights before and after the
+  push, and check how the FSDP drafter module is initialized. If acceptance is also 1.00, SD at TP=1 is broken.
 - Open issues for the full runs: (1) hidden-state collection time on the straggler (optimize or overlap it);
   (2) idle released workers never join or restart training; (3) interval 1 was for the spike only: use TLT's
   default 10 (collection runs only on the step before a training step).

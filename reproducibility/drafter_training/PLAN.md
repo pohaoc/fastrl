@@ -1,6 +1,6 @@
 # Plan: TLT with opportunistic drafter training on a 4-engine rollout topology
 
-Status: fix verified, drafter trains; DAPO spike step 1 took 901 s at 4 x TP=1 (see ../notes/HANDOFF.md) (2026-09-29). Follows the 5-step frozen-drafter study in
+Status: drafter trains, but SD acceptance is 1.00 at 4 x TP=1 with drafter training (suspect: drafter weight push at wake-up); see ../notes/HANDOFF.md (2026-09-29). Follows the 5-step frozen-drafter study in
 [`../dataset/`](../dataset/README.md).
 
 ## Goal
