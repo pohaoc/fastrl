@@ -1,0 +1,2 @@
+- [FastRL env setup](fastrl-env-setup.md) — .venv + CUDA 12.8 + tvm-ffi b15 fixes; Eurus data location
+- [SD breakdown experiment](sd-breakdown-experiment.md) — SD-on/off traced GRPO runs, controlled baseline, straggler findings
