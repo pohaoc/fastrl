@@ -22,6 +22,7 @@ TARGET_DIR=$(python -c "from huggingface_hub import snapshot_download; print(sna
 echo "job=$SLURM_JOB_ID node=$(hostname) DATASET=$DATASET gpus=$NGPU in=$ROLLOUTS out=$HS_DIR target=$TARGET_DIR"
 mkdir -p "$HS_DIR"
 cd "$REPO/eagle-train"
+python "$REPO/reproducibility/offline_drafter/check_env.py" "$TARGET_MODEL" "$INIT_DRAFT"   # env preflight (GPU node)
 torchrun --standalone --nproc_per_node="$NGPU" eagle_datagen.py \
     model.base_model_path="$TARGET_DIR" \
     data.data_path="$ROLLOUTS" \

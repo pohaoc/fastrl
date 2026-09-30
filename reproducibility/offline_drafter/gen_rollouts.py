@@ -57,7 +57,10 @@ def gen_dapo(args, tok):
     engine.shutdown()
     rows = []
     for i, p, o in zip(train_idx, prompts, outs):
+        # SGLang (tokenizer enabled) prefixes output_ids with up to 5 context tokens; keep the generated ones
         out_ids = list(o["output_ids"])
+        n_gen = int(o["meta_info"]["completion_tokens"])
+        out_ids = out_ids[len(out_ids) - n_gen :] if n_gen > 0 else []
         fin = o["meta_info"]["finish_reason"]
         rows.append({
             "index": int(i), "input_ids": list(p) + out_ids, "loss_mask": [0] * len(p) + [1] * len(out_ids),

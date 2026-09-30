@@ -71,7 +71,13 @@ async def run_skyrl_trajectory(
             stop_reason = "length"
             break
         out = await engine.async_generate(input_ids=input_ids, sampling_params=turn_params)
+        # With the tokenizer enabled (sync rollout mode), SGLang's output_ids start with up to
+        # INIT_INCREMENTAL_DETOKENIZATION_OFFSET (5) context tokens kept for incremental detokenization;
+        # only the last completion_tokens are generated. Without this, every turn re-appended the end of the
+        # context (prompt tail, observation tail) to input_ids, with loss_mask 1.
         output_ids = list(out["output_ids"])
+        n_gen = int(out["meta_info"]["completion_tokens"])
+        output_ids = output_ids[len(output_ids) - n_gen :] if n_gen > 0 else []
         finish = out["meta_info"]["finish_reason"]
         stop_reason = finish.get("type", "stop") if isinstance(finish, dict) else str(finish)
         # vLLM's include_stop_str_in_output (used by the harness) cuts the TEXT right after the stop

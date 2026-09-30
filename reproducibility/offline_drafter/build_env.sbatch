@@ -27,27 +27,6 @@ DS_BUILD_OPS=0 uv pip install --no-build-isolation deepspeed
 # PyPI torch 2.6 wheels use the pre-C++11 ABI
 uv pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
 
-python -c "import torch, transformers, deepspeed, flash_attn; print('torch', torch.__version__, 'transformers', transformers.__version__, 'deepspeed', deepspeed.__version__, 'flash_attn', flash_attn.__version__)"
-
-# The released drafter's tensors must map onto eagle-train's model (what --init_draft_path loads)
-cd "$REPO/eagle-train"
-HF_HOME=/oscar/scratch/$USER/hf HF_HUB_OFFLINE=1 python - <<'EOF'
-import torch
-from huggingface_hub import snapshot_download
-from transformers import AutoConfig
-from model.qwen2_eagle import Qwen2ForCausalLMEagle
-cfg = AutoConfig.from_pretrained(snapshot_download("Qwen/Qwen2.5-7B"))
-cfg.num_hidden_layers = 1
-with torch.device("meta"):
-    m = Qwen2ForCausalLMEagle(cfg)
-keys = {k: tuple(v.shape) for k, v in m.state_dict().items()}
-sd = torch.load(snapshot_download("mit-han-lab/Qwen2.5-7B-Eagle-RL") + "/pytorch_model.bin", map_location="cpu", mmap=True, weights_only=True)
-ck = {(k if k.startswith(("model.", "lm_head")) else "model." + k): tuple(v.shape) for k, v in sd.items()}
-print("model params:", len(keys), "checkpoint tensors:", len(ck))
-print("missing from checkpoint:", sorted(set(keys) - set(ck)))
-print("unexpected in checkpoint:", sorted(set(ck) - set(keys)))
-bad = [k for k in set(keys) & set(ck) if keys[k] != ck[k]]
-print("shape mismatches:", bad)
-assert not (set(ck) - set(keys)) and not bad and set(keys) - set(ck) <= {"lm_head.weight"}
-print("OK: Eagle-RL checkpoint maps onto eagle-train's Qwen2ForCausalLMEagle")
-EOF
+# Import checks need a GPU node (DeepSpeed's Triton kernels look for a driver at import, and transformers
+# imports DeepSpeed), so they run as a preflight in datagen.sbatch (check_env.py). Here: installed versions.
+uv pip list | grep -E '^(torch|transformers|deepspeed|flash-attn|flash_attn|triton) '
