@@ -30,5 +30,10 @@ echo "commit=$(git -C "$REPO" rev-parse HEAD)"; git -C "$REPO" status --short
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 python -c "import torch, sglang, verl; print('torch', torch.__version__, 'sglang', sglang.__file__, 'verl', verl.__file__)"
 
-bash "$REPO/reproducibility/dataset/bench_acceptance.sh"
+# EAGLE_PATHS="<d1> <d2> ...": benchmark several drafters on the same prompts in one job (default: EAGLE_PATH)
+for EAGLE_PATH in ${EAGLE_PATHS:-${EAGLE_PATH:-mit-han-lab/Qwen2.5-7B-Eagle-RL}}; do
+    export EAGLE_PATH
+    echo "===== drafter $EAGLE_PATH $(date)"
+    bash "$REPO/reproducibility/dataset/bench_acceptance.sh"
+done
 echo "end=$(date); full log in $OUT/bench/"

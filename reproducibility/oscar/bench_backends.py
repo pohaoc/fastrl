@@ -28,11 +28,17 @@ def run(args):
     df = pd.read_parquet(args.parquet).sample(args.n, random_state=0)
     prompts = [tok.apply_chat_template(list(m), add_generation_prompt=True, tokenize=False) for m in df.prompt]
     t0 = time.time()
+    # Same speculative engine arguments as verl (sglang_rollout.py: self.speculative_args). FastRL's adaptive SD
+    # (and so FASTRL_FORCE_PLAIN_DECODE, the plain baseline) is only active with these.
+    extra = {"page_size": 128} if args.backend == "fa4" else {}  # fa4 paged KV on sm100 requires page_size 128
     engine = sgl.Engine(
         model_path=args.model, tp_size=args.tp, attention_backend=args.backend, dtype="bfloat16",
-        mem_fraction_static=0.6, context_length=args.max_new_tokens + 2048, max_running_requests=1,
-        cuda_graph_max_bs=1, speculative_algorithm="EAGLE", speculative_draft_model_path=args.drafter,
-        speculative_num_steps=8, speculative_eagle_topk=4, speculative_num_draft_tokens=48, log_level="warning",
+        mem_fraction_static=0.6, context_length=args.max_new_tokens + 2048, log_level="warning",
+        speculative_algorithm="EAGLE", speculative_draft_model_path=args.drafter,
+        speculative_num_steps=8, speculative_eagle_topk=4, speculative_num_draft_tokens=48,
+        speculative_eagle_mab_algorithm="BEG", apdative_speculative_batch_size_threshold=32,
+        speculative_eagle_mab_configs=["8_4_32", "8_4_16", "8_4_8"], speculative_mab_bs_threshold=[1, 2, 5, 21],
+        max_running_requests=512, cuda_graph_max_bs=32, disable_overlap_schedule=True, **extra,
     )
     init_s = time.time() - t0
     sp = {"temperature": args.temperature, "max_new_tokens": args.max_new_tokens, "ignore_eos": True}

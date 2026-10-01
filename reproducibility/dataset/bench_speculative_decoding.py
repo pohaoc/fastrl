@@ -26,6 +26,10 @@ def main():
     parser.add_argument("--speculative_num_draft_tokens", type=int, default=64, help="Number of draft tokens")
     parser.add_argument("--max_bs", type=int, default=8, help="Max batch size")
     parser.add_argument("--attention_backend", type=str, default="fa3", help="Attention backend to use")
+    parser.add_argument("--temperature", type=float, default=0.6, help="Sampling temperature")
+    parser.add_argument("--max_new_tokens", type=int, default=2048, help="Max new tokens per request")
+    parser.add_argument("--stop", type=str, nargs="*", default=None, help="Stop strings (e.g. </sql> for SkyRL-SQL)")
+    parser.add_argument("--total_runs", type=int, default=2, help="Passes over the prompts (the last one is reported)")
 
     args = parser.parse_args()
 
@@ -42,9 +46,11 @@ def main():
     # Create a sampling params object.
     sampling_params = {
         "n": 1,
-        "temperature": 0.6,
-        "max_new_tokens": 2048,
+        "temperature": args.temperature,
+        "max_new_tokens": args.max_new_tokens,
     }
+    if args.stop:
+        sampling_params["stop"] = args.stop
     # Set speculative args based on algorithm
     speculative_args = {}
     if spec_algorithm == "EAGLE3":
@@ -83,7 +89,7 @@ def main():
         **speculative_args,
     )
 
-    total_runs = 2
+    total_runs = args.total_runs
 
     total_prompts = len(prompts)
     if total_prompts < args.max_bs:

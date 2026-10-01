@@ -17,7 +17,7 @@ set -uo pipefail
 REPO=${FASTRL_REPO:-$SLURM_SUBMIT_DIR}
 source "$REPO/reproducibility/oscar/env.sh"
 export HF_HUB_OFFLINE=1
-BACKENDS=${BACKENDS:-"triton fa4 flashinfer"}
+BACKENDS=${BACKENDS:-"triton fa4"}   # flashinfer: JIT broken in this env (tvm-ffi), see bench 6921102
 OUT=$RUN_ROOT/bench_backends/$SLURM_JOB_ID
 mkdir -p "$OUT"
 echo "job=$SLURM_JOB_ID node=$(hostname) commit=$(git -C "$REPO" rev-parse HEAD) backends=$BACKENDS out=$OUT"
