@@ -60,8 +60,13 @@ RC=$?
 set -e
 kill $MEM_PID $GPU_PID 2>/dev/null || true
 echo "launcher rc=$RC end=$(date) peak_host_mem_gb=$(sort -k2 -n "$MON_DIR/host_mem_gb.log" | tail -1 | cut -d' ' -f2)"
-if [ $RC -ne 0 ] && [ -d "$RAY_TMPDIR/session_latest/logs" ]; then
-    cp -r "$RAY_TMPDIR/session_latest/logs" "$MON_DIR/ray_logs"
-    echo "ray logs copied to $MON_DIR/ray_logs (read worker-*.err from the head)"
-fi
+# Ray puts its session under $RAY_TMPDIR/ray/ (older layouts: directly under $RAY_TMPDIR). The worker logs hold
+# the SGLang engine/scheduler output, which the job log does not.
+for S in "$RAY_TMPDIR/ray/session_latest" "$RAY_TMPDIR/session_latest"; do
+    if [ $RC -ne 0 ] && [ -d "$S/logs" ]; then
+        cp -r "$S/logs" "$MON_DIR/ray_logs"
+        echo "ray logs copied to $MON_DIR/ray_logs (read worker-*.err from the head)"
+        break
+    fi
+done
 exit $RC
