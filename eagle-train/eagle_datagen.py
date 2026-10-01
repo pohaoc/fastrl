@@ -1,6 +1,10 @@
 import os
 import json
 import logging
+# Import DeepSpeed before transformers: transformers.modeling_utils imports deepspeed when it is installed, and
+# deepspeed's hybrid_engine then touches transformers.models.opt while modeling_utils is half-initialised
+# (circular-import error with deepspeed 0.19 + transformers 4.51). eagle_trainer.py already imports it first.
+import deepspeed  # noqa: F401
 import torch
 import torch.distributed as dist
 import hydra
