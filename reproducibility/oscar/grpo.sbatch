@@ -31,7 +31,8 @@ export RAY_NUM_CPUS=$SLURM_CPUS_PER_TASK
 export RAY_STOP=0
 export RAY_TMPDIR=/tmp/ray-$SLURM_JOB_ID
 
-RUN_TAG=sd_${SD}-tp${ROLLOUT_TP:-4}-drafter${DRAFTER_TRAIN:-0}-${SLURM_JOB_ID}
+SPEC_TAG=$(basename "${SPEC_MODEL_PATH:-mit-han-lab/Qwen2.5-7B-Eagle-RL}")   # which EAGLE drafter (launcher default: released)
+RUN_TAG=sd_${SD}-tp${ROLLOUT_TP:-4}-drafter${DRAFTER_TRAIN:-0}-${SPEC_TAG}-${SLURM_JOB_ID}
 export FASTRL_TRACE_DIR=${FASTRL_TRACE_DIR:-$OUT/$DATASET/traces/$RUN_TAG}
 MON_DIR=$OUT/$DATASET/monitor/$RUN_TAG
 mkdir -p "$FASTRL_TRACE_DIR" "$MON_DIR" "$RAY_TMPDIR"
