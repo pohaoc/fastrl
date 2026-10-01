@@ -48,6 +48,7 @@ cat > "$CFG" <<EOF
 EOF
 echo "job=$SLURM_JOB_ID node=$(hostname) DATASET=$DATASET files=$N_FILES train=$N_TRAIN gpus=$NGPU micro=$MICRO accum=$ACCUM" \
      "global_batch=$((MICRO * NGPU * ACCUM)) steps/epoch=$STEPS_PER_EPOCH epochs=$EPOCHS total=$TOTAL lr=$LR warmup=$WARMUP" \
+     "max_seq_len=${TRAIN_MAX_LEN:-from dir name}" \
      "init=$INIT_DIR commit=$(git -C "$REPO" rev-parse HEAD)"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 
@@ -63,7 +64,8 @@ torchrun --standalone --nproc_per_node="$NGPU" eagle_trainer.py \
     --batch_size "$MICRO" \
     --epochs "$EPOCHS" \
     --precision bf16 \
-    --validate
+    --validate \
+    ${TRAIN_MAX_LEN:+--max_seq_len "$TRAIN_MAX_LEN"}
 
 python "$REPO/reproducibility/offline_drafter/export_drafter.py" --ckpt "$CKPT_DIR" --out "$EXPORT_DIR" --reference "$INIT_DRAFT"
 echo "drafter ready: $EXPORT_DIR"

@@ -44,6 +44,8 @@ def add_args():
     parser.add_argument("--init_draft_path", type=str, default=None,
                         help="EAGLE drafter directory (HF format, e.g. a Qwen2.5-7B-Eagle-RL snapshot) to fine-tune from")
     parser.add_argument("--validate", action="store_true", help="Run validation after every epoch")
+    parser.add_argument("--max_seq_len", type=int, default=None,
+                        help="Pad/truncate every sample to this length (default: from the data directory name, <name>-<N>K)")
     parser = deepspeed.add_config_arguments(parser)
     return parser
 
@@ -67,6 +69,10 @@ class EagleDataset(Dataset):
 
         try:
             data = torch.load(self.datapath[idx], weights_only=True)
+            if self.global_max_seq_len and len(data["input_ids"]) > self.global_max_seq_len:
+                L = self.global_max_seq_len
+                data["input_ids"], data["hidden_state"] = data["input_ids"][:L], data["hidden_state"][:L]
+                data["loss_mask"] = data["loss_mask"][:L]
             data["loss_mask"][-1] = 0
             processed_item = {
                 "input_ids": data["input_ids"][1:],
@@ -314,6 +320,8 @@ class EagleTrainerDeepSpeed:
                 except:
                     continue
 
+        if self.args.max_seq_len:
+            dataset_max_len = self.args.max_seq_len
         logger.info(f"Using max sequence length: {dataset_max_len}")
 
         # Collect all .pt files
