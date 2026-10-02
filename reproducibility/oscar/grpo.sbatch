@@ -30,6 +30,9 @@ export OUT=${OUT:-$RUN_ROOT/${RUN_GROUP:-drafter_training}}
 export RAY_NUM_CPUS=$SLURM_CPUS_PER_TASK
 export RAY_STOP=0
 export RAY_TMPDIR=/tmp/ray-$SLURM_JOB_ID
+# SkyRL-SQL env thread pool: the harness value (2048) exceeds Oscar's per-user thread limit (ulimit -u 4096,
+# shared with Ray/SGLang/torch threads) -> "can't start new thread" (jobs 6928988-90). Concurrency of env calls only.
+export SKYRL_ENV_WORKERS=${SKYRL_ENV_WORKERS:-128}
 
 SPEC_TAG=$(basename "${SPEC_MODEL_PATH:-mit-han-lab/Qwen2.5-7B-Eagle-RL}")   # which EAGLE drafter (launcher default: released)
 RUN_TAG=sd_${SD}-tp${ROLLOUT_TP:-4}-drafter${DRAFTER_TRAIN:-0}-${SPEC_TAG}-${SLURM_JOB_ID}

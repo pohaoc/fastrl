@@ -544,7 +544,8 @@ class RolloutDrafterManager:
         dist.broadcast_object_list(addresses, src=0)
         req_address, pub_address = addresses
 
-        # Create worker client
+        # Create worker client (used from the rollout thread's event loop only)
+        self._coord_addresses = (req_address, pub_address)
         self.worker_client = WorkerClient(req_address, pub_address, self.rank)
 
         if not self.is_coordinator:
@@ -574,13 +575,17 @@ class RolloutDrafterManager:
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # This thread gets its own client: ZMQ sockets are not thread-safe, and WorkerClient's asyncio.Lock binds to
+        # one event loop. Sharing self.worker_client with the rollout thread raced: mark_completed waiting on a lock
+        # held by get_state here raised "Lock ... is bound to a different event loop" (job 6928986, step 7).
+        self._listener_client = WorkerClient(*self._coord_addresses, self.rank)
 
         check_counter = 0
 
         while self._event_listener_running:
             try:
                 # Check for broadcasts (non-blocking with timeout)
-                command = loop.run_until_complete(self.worker_client.wait_for_event(timeout=0.5))
+                command = loop.run_until_complete(self._listener_client.wait_for_event(timeout=0.5))
 
                 if command is None:
                     # No broadcast, do periodic state check every 2.5 seconds
@@ -614,12 +619,13 @@ class RolloutDrafterManager:
                 time.sleep(0.1)
 
         logger.info(f"Worker {self.rank} event listener thread exiting")
+        loop.run_until_complete(self._listener_client.cleanup())
         loop.close()
 
     async def _check_training_state_sync(self, loop):
         """Check coordinator state and start training if needed (runs in event listener thread)."""
         try:
-            response = await self.worker_client.get_state()
+            response = await self._listener_client.get_state()
             if response["status"] != "ok":
                 return
 

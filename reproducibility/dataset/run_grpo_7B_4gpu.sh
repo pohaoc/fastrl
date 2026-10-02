@@ -97,7 +97,7 @@ if [ "$DATASET" = sql ]; then
         +actor_rollout_ref.rollout.skyrl_env.max_generate_length=3000
         +actor_rollout_ref.rollout.skyrl_env.max_input_length=8192
         "+actor_rollout_ref.rollout.skyrl_env.stop=['</sql>','</solution>']"
-        +actor_rollout_ref.rollout.skyrl_env.max_env_workers=2048
+        +actor_rollout_ref.rollout.skyrl_env.max_env_workers=${SKYRL_ENV_WORKERS:-2048}
         +actor_rollout_ref.rollout.skyrl_env.env_configs.text2sql.db_path=$DATA_PATH/db/data
     )
 fi
