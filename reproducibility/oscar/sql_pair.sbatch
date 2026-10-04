@@ -29,8 +29,10 @@ python -c "import verl, sglang; print('verl from', verl.__file__); print('sglang
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 cat "$DRAFTER/export_info.json" | head -5
 
-arm() {  # name SD [drafter]
+FAILED=0
+arm() {  # name SD [Hydra overrides...]
     local name=$1 sd=$2
+    shift 2
     export RAY_TMPDIR=/tmp/ray-$SLURM_JOB_ID-$name
     mkdir -p "$RAY_TMPDIR"
     echo; echo "=================== $name (SD=$sd) $(date +%T)"
@@ -39,6 +41,7 @@ arm() {  # name SD [drafter]
     local rc=$?
     echo "=================== $name exit=$rc $(date +%T)"
     if [ $rc -ne 0 ]; then
+        FAILED=1
         tail -40 "$BASE/$name.log"
         cp -r "$RAY_TMPDIR"/ray/session_latest/logs "$BASE/$name.ray_logs" 2>/dev/null || true
     fi
@@ -48,3 +51,4 @@ arm sdon true "$@"
 arm sdoff false "$@"
 python reproducibility/oscar/compare_runs.py "$BASE/sdon.log" "$BASE/sdoff.log"
 echo "end=$(date)"
+exit $FAILED
