@@ -9,6 +9,7 @@
 #SBATCH --partition=gpu-he
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --constraint=l40s
+#SBATCH --exclude=gpu3001                 # uncorrectable ECC errors (2026-09-30, 2026-10-04)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
@@ -26,7 +27,7 @@ mkdir -p "$BASE"
 echo "job=$SLURM_JOB_ID node=$(hostname) start=$(date) commit=$(git rev-parse --short HEAD) STEPS=$STEPS drafter=$DRAFTER"
 git status --short
 python -c "import verl, sglang; print('verl from', verl.__file__); print('sglang from', sglang.__file__)"
-nvidia-smi --query-gpu=index,name,memory.total --format=csv
+gpu_preflight
 cat "$DRAFTER/export_info.json" | head -5
 
 FAILED=0

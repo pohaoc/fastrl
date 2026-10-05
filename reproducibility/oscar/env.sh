@@ -18,3 +18,18 @@ export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
 # (e.g. the sql-port worktree) instead. Python puts PYTHONPATH ahead of the .pth editable finders.
 _FASTRL_CHECKOUT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export PYTHONPATH=$_FASTRL_CHECKOUT:$_FASTRL_CHECKOUT/third-party/sglang/python${PYTHONPATH:+:$PYTHONPATH}
+
+# GPU health check for the start of a job: any GPU with uncorrectable ECC errors, or that cannot run a
+# kernel, fails the job at once with a clear message. gpu3001 failed this way twice (2026-09-30, 2026-10-04),
+# hence the --exclude in the sbatch files.
+gpu_preflight() {
+    nvidia-smi --query-gpu=index,name,ecc.errors.uncorrected.volatile.total,retired_pages.pending --format=csv
+    python - <<'PY' || { echo "GPU PREFLIGHT FAILED on $(hostname): exclude this node and resubmit"; exit 3; }
+import torch
+for i in range(torch.cuda.device_count()):
+    x = torch.ones(1 << 20, device=f"cuda:{i}")
+    assert float((x * 2).sum()) == 2.0 * (1 << 20), f"cuda:{i} computed a wrong result"
+    torch.cuda.synchronize(i)
+print(f"GPU preflight OK: {torch.cuda.device_count()} GPUs")
+PY
+}

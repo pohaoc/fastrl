@@ -6,6 +6,7 @@
 #SBATCH --partition=gpu-he
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --constraint=l40s
+#SBATCH --exclude=gpu3001                 # uncorrectable ECC errors (2026-09-30, 2026-10-04)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32

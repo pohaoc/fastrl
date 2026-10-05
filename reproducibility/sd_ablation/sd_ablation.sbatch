@@ -16,6 +16,7 @@
 #SBATCH --partition=gpu-he
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --constraint=l40s
+#SBATCH --exclude=gpu3001                 # uncorrectable ECC errors (2026-09-30, 2026-10-04)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
@@ -31,7 +32,7 @@ mkdir -p "$OUT"
 echo "job=$SLURM_JOB_ID node=$(hostname) start=$(date) commit=$(git rev-parse --short HEAD)"
 git status --short
 python -c "import verl, sglang; print('verl from', verl.__file__); print('sglang from', sglang.__file__)"
-nvidia-smi --query-gpu=index,name,memory.total --format=csv
+gpu_preflight
 
 snap() { python -c "from huggingface_hub import snapshot_download as s; print(s('$1', revision='$2'))"; }
 MODEL=$(snap Qwen/Qwen2.5-Coder-7B-Instruct c03e6d358207e414f1eca0bb1891e29f1db0e242)
