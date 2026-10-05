@@ -188,6 +188,9 @@ from sglang.srt.utils.hf_transformers_utils import (
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 from torch.cuda import Stream as CudaStream
+
+from sglang.srt.fastrl_steplog import now as steplog_now
+from sglang.srt.fastrl_steplog import steplog
 from torch.cuda import StreamContext as CudaStreamContext
 from torch.distributed import barrier
 
@@ -1049,6 +1052,10 @@ class Scheduler(
 
                     self.in_spec_transition = True
                     self.spec_transition_remaining_reqs = len(reqs_to_requeue)
+                    if steplog.enabled and self.tp_rank == 0:
+                        # Switch to SD: prefix cache dropped, running requests re-prefilled.
+                        steplog.record({"event": "sd_transition", "t0": steplog_now(),
+                                        "requeued": len(reqs_to_requeue), "queue": len(self.waiting_queue)})
 
                     continue
 
@@ -2231,6 +2238,7 @@ class Scheduler(
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
         self.forward_ct += 1
+        steplog_t0 = steplog_now() if steplog.enabled else None
 
         # Set queue length for adaptive speculation
         batch.num_queue_req = len(self.waiting_queue)
@@ -2331,6 +2339,16 @@ class Scheduler(
             batch_result.extend_logprob_start_len_per_req = (
                 extend_logprob_start_len_per_req
             )
+            if steplog_t0 is not None and self.tp_rank == 0:
+                steplog.record({
+                    "t0": steplog_t0, "t1": steplog_now(), "mode": batch.forward_mode.name,
+                    "bs": batch.batch_size(), "queue": len(self.waiting_queue),
+                    "prefill_tok": sum(extend_input_len_per_req or [r.extend_input_len for r in batch.reqs])
+                    if batch.forward_mode.is_extend() else 0,
+                    "cg": bool(batch_result.can_run_cuda_graph),
+                    "sd": getattr(self.model_worker, "fastrl_last_step_sd", None),
+                    "acc": None if self.enable_overlap else batch_result.num_accepted_tokens,
+                })
             return batch_result
         else:  # embedding or reward model
             model_worker_batch = batch.get_model_worker_batch()
@@ -2677,6 +2695,8 @@ class Scheduler(
                 self.draft_worker.clear_cache_pool()
                 if self.draft_worker.adaptive_spec_threshold is not None:
                     self.draft_worker.reset_adaptive_spec_params()
+                    if steplog.enabled and self.tp_rank == 0:
+                        steplog.record({"event": "sd_reset", "t0": steplog_now()})
 
             self.num_generated_tokens = 0
             self.forward_ct_decode = 0

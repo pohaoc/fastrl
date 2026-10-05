@@ -67,6 +67,9 @@ from sglang.srt.utils import (
 if is_cuda():
     from sgl_kernel import segment_packbits
 
+# Ablation switch: keep the EAGLE engine (drafter loaded, graphs, scheduling) but never speculate on decode.
+_FORCE_PLAIN_DECODE = os.environ.get("FASTRL_FORCE_PLAIN_DECODE", "0") == "1"
+
 logger = logging.getLogger(__name__)
 SGLANG_RETURN_ORIGINAL_LOGPROB = get_bool_env_var("SGLANG_RETURN_ORIGINAL_LOGPROB")
 
@@ -356,6 +359,9 @@ class EAGLEWorker(TpModelWorker):
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             return True
 
+        if _FORCE_PLAIN_DECODE:
+            return False
+
         # For DECODE batches, check threshold with warmup
         current_enable_sd = False
         if batch_size <= self.adaptive_spec_threshold:
@@ -408,6 +414,7 @@ class EAGLEWorker(TpModelWorker):
             events["processing_start"].record()
 
         enable_sd = self.should_enable_sd(batch)
+        self.fastrl_last_step_sd = enable_sd  # read by the scheduler step log
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             logits_output, next_token_ids, seq_lens_cpu = self.forward_target_extend(batch)
 
