@@ -122,6 +122,52 @@ def main():
             req = [e["requeued"] for e in a["transitions"]]
             print(f"  SD transitions: {len(req)} (prefix cache dropped each time); requeued per transition: "
                   f"min {min(req)} / median {median(req)} / max {max(req)}")
+    cache_report(args.run_dir, arms)
+
+
+def cache_report(run_dir, arms):
+    """Prefix-cache hits per turn from SGLang meta_info (turns.jsonl), split by SD transitions."""
+    print("\n== Prefix cache (from per-turn meta_info): hit = cached prompt tokens / prompt tokens")
+    print(f"{'arm':16} {'turns':>6} {'all':>6} {'turn 1':>6} {'later':>6} {'later, reset since prev turn':>29} "
+          f"{'later, no reset':>15} {'uncached Mtok':>13} {'step-log prefill Mtok':>21} {'accept/turn':>11}")
+    for name, (r, a) in arms.items():
+        path = os.path.join(run_dir, name, "turns.jsonl")
+        if not os.path.exists(path):
+            continue
+        turns = [json.loads(l) for l in open(path)]
+        resets = sorted(e["t0"] for e in (a["transitions"] if a else []))
+        prev_end = {}
+        groups = defaultdict(lambda: [0, 0, 0])   # prompt tokens, cached tokens, turns
+        for t in sorted(turns, key=lambda t: (t["traj"], t["turn"])):
+            p, c = t["prompt_tokens"] or 0, t["cached_tokens"] or 0
+            keys = ["all", "turn 1" if t["turn"] == 0 else "later"]
+            if t["turn"] > 0:
+                reset = any(prev_end[t["traj"]] < e <= t["t0"] for e in resets)
+                keys.append("reset" if reset else "no reset")
+            for k in keys:
+                g = groups[k]
+                g[0] += p
+                g[1] += c
+                g[2] += 1
+            prev_end[t["traj"]] = t["t1"]
+
+        def hit(k):
+            g = groups.get(k)
+            return f"{100 * g[1] / g[0]:5.1f}%" if g and g[0] else "-"
+
+        def hit_n(k):
+            g = groups.get(k)
+            return f"{hit(k)} ({int(g[2])} turns)" if g else "-"
+
+        sd = [t for t in turns if (t.get("spec_verify_ct") or 0) > 0 and t.get("spec_accept_length")]
+        vct = sum(t["spec_verify_ct"] for t in sd)
+        acc = f"{sum(t['spec_accept_length'] * t['spec_verify_ct'] for t in sd) / vct:.2f}" if vct else "-"
+        g = groups["all"]
+        steplog_prefill = a["time"]["prefill_tok"] / 1e6 if a else float("nan")
+        print(f"{name:16} {int(g[2]):6d} {hit('all'):>6} {hit('turn 1'):>6} {hit('later'):>6} {hit_n('reset'):>29} "
+              f"{hit_n('no reset'):>15} {(g[0] - g[1]) / 1e6:13.2f} {steplog_prefill:21.2f} {acc:>11}")
+    print("  uncached Mtok = prompt tokens the engine had to prefill per meta_info; the step-log prefill also includes"
+          " re-prefills of requests requeued by SD transitions, which meta_info does not report.")
 
 
 if __name__ == "__main__":

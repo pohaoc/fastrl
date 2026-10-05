@@ -23,6 +23,30 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 
+class TurnRecorder:
+    """Stands in for the engine in one trajectory's agent loop (which only calls async_generate) and records
+    SGLang's per-turn meta_info: prompt tokens, how many of them came from the prefix cache, and the
+    speculation counters. Times use the same host clock as the scheduler step log."""
+
+    def __init__(self, engine, traj, sink):
+        self.engine, self.traj, self.sink, self.turn = engine, traj, sink, 0
+
+    async def async_generate(self, **kw):
+        t0 = time.time()
+        out = await self.engine.async_generate(**kw)
+        m = out["meta_info"]
+        fin = m.get("finish_reason")
+        self.sink.append({
+            "traj": self.traj, "turn": self.turn, "t0": t0, "t1": time.time(),
+            "prompt_tokens": m.get("prompt_tokens"), "cached_tokens": m.get("cached_tokens"),
+            "completion_tokens": m.get("completion_tokens"), "spec_verify_ct": m.get("spec_verify_ct"),
+            "spec_accept_length": m.get("spec_accept_length"),
+            "finish": fin.get("type") if isinstance(fin, dict) else fin,
+        })
+        self.turn += 1
+        return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -111,22 +135,26 @@ def main():
         result["phase"] = "rollout"
         json.dump(result, open(rpath, "w"), indent=2)
 
-        async def one(i):
+        async def one(i, traj):
             r = df.iloc[i]
             return await run_skyrl_trajectory(
-                engine, tok, prompt_ids[i], list(r.prompt), dict(r.extra_info["tools_kwargs"]), env_cfg, sampling,
+                TurnRecorder(engine, traj, turns), tok, prompt_ids[i], list(r.prompt), dict(r.extra_info["tools_kwargs"]), env_cfg, sampling,
                 max_turns=5, max_generate_length=3000, max_input_length=8192, stop=["</sql>", "</solution>"],
                 eos_ids=eos_ids, executor=ex,
             )
 
         result["rollout_t0"] = time.time()
-        trajs = await asyncio.gather(*[one(int(i)) for i in chosen for _ in range(args.n)])
+        jobs = [int(i) for i in chosen for _ in range(args.n)]
+        trajs = await asyncio.gather(*[one(i, k) for k, i in enumerate(jobs)])
         result["rollout_t1"] = time.time()
         await engine.tokenizer_manager.flush_cache()   # as verl does after every rollout (resets adaptive SD state)
         engine.shutdown()
         return trajs
 
+    turns = []
     trajs = asyncio.run(run())
+    with open(os.path.join(args.out, "turns.jsonl"), "w") as f:
+        f.write("".join(json.dumps(t) + "\n" for t in turns))
     gen = [sum(t.loss_mask) for t in trajs]
     result.update(
         phase="done",
