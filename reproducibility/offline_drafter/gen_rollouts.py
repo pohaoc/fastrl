@@ -1,7 +1,8 @@
 """Sample the target model's rollouts on DAPO-Math or SkyRL-SQL prompts, as training data for an offline EAGLE drafter.
 
 The drafter must learn the policy's own distribution, so responses come from the target model (--model, the RL
-policy before training) at the RL sampling settings: DAPO temperature 0.9 / top-p 1.0 (examples/grpo_7B.sh); SQL
+policy before training) at the RL sampling settings: DAPO --temperature / --top_p (defaults 0.9 / 1.0 = examples/grpo_7B.sh;
+per-target values in paths.sh); SQL
 temperature 0.6 / top-p 0.95 in the SkyRL-gym text2sql agent loop used by RL (skyrl_env_rollout.py; <=5 turns,
 3000 tokens per turn, 8192-token context limit, as in reproducibility/oscar/grpo_sql.sbatch).
 
@@ -33,6 +34,7 @@ def engine_for(args, context_length):
     return sgl.Engine(
         model_path=args.model,
         tp_size=1,
+        dp_size=args.dp,   # one engine replica per GPU
         mem_fraction_static=args.mem_fraction,
         context_length=context_length,
         attention_backend=args.attention_backend,  # flashinfer's JIT is broken in this env
@@ -48,11 +50,11 @@ def gen_dapo(args, tok):
     df.iloc[heldout_idx].to_parquet(os.path.join(args.out, "heldout.parquet"))
     prompts = [tok.apply_chat_template(list(df.iloc[i]["prompt"]), add_generation_prompt=True, tokenize=True)
                for i in train_idx]
-    engine = engine_for(args, context_length=8192)
+    engine = engine_for(args, context_length=max(len(p) for p in prompts) + args.max_new_tokens + 16)
     t0 = time.time()
     outs = engine.generate(
         input_ids=prompts,
-        sampling_params={"temperature": 0.9, "top_p": 1.0, "max_new_tokens": args.max_new_tokens},
+        sampling_params={"temperature": args.temperature, "top_p": args.top_p, "max_new_tokens": args.max_new_tokens},
     )
     print(f"generated {len(outs)} responses in {time.time() - t0:.0f} s")
     engine.shutdown()
@@ -121,7 +123,10 @@ def main():
     ap.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct", help="target model (policy) or its local dir")
     ap.add_argument("--num_prompts", type=int, default=9200, help="DAPO: training prompts (the rest are held out)")
     ap.add_argument("--n", type=int, default=4, help="SQL: trajectories per prompt")
-    ap.add_argument("--max_new_tokens", type=int, default=3584, help="DAPO: the drafter trains on <=4K-token sequences")
+    ap.add_argument("--max_new_tokens", type=int, default=3584, help="DAPO: response cap (datagen truncates rows to its max length)")
+    ap.add_argument("--temperature", type=float, default=0.9, help="DAPO: the RL rollout temperature for this target")
+    ap.add_argument("--top_p", type=float, default=1.0, help="DAPO: the RL rollout top-p for this target")
+    ap.add_argument("--dp", type=int, default=1, help="data-parallel engine replicas (one per GPU)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mem_fraction", type=float, default=0.85)
     ap.add_argument("--attention_backend", default="fa3")

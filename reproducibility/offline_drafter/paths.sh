@@ -5,8 +5,17 @@ source "$REPO/reproducibility/oscar/env.sh"          # HF_HOME, DATA_ROOT, SCRAT
 export EAGLE_ENV=${EAGLE_ENV:-$HOME/envs/eagle-train}
 # Target (policy) model the drafter is trained for, pinned. The drafter's config is derived from the
 # target's (export_drafter.py); its weights are trained on this model's hidden states.
-TARGET_MODEL=${TARGET_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
-TARGET_REVISION=${TARGET_REVISION:-c03e6d358207e414f1eca0bb1891e29f1db0e242}
+#   TARGET=coder          Qwen/Qwen2.5-Coder-7B-Instruct (SkyRL-SQL)
+#   TARGET=r1-distill-7b  deepseek-ai/DeepSeek-R1-Distill-Qwen-7B (DAPO-Math-17k)
+# TARGET_MODEL / TARGET_REVISION override the preset.
+TARGET=${TARGET:-coder}
+case $TARGET in
+  coder)         _M=Qwen/Qwen2.5-Coder-7B-Instruct;         _R=c03e6d358207e414f1eca0bb1891e29f1db0e242 ;;
+  r1-distill-7b) _M=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B; _R=916b56a44061fd5cd7d6a8fb632557ed4f724f60 ;;
+  *) echo "TARGET must be coder or r1-distill-7b"; exit 1 ;;
+esac
+TARGET_MODEL=${TARGET_MODEL:-$_M}
+TARGET_REVISION=${TARGET_REVISION:-$_R}
 TARGET_TAG=$(basename "$TARGET_MODEL")
 # Warm start for the trainable drafter weights (fc + decoder layer); INIT_DRAFT=none trains from scratch.
 # embed_tokens / lm_head always come frozen from the target, whatever the warm start.
@@ -18,17 +27,29 @@ LAYOUT_REVISION=38905764986fdd43c64f0b5ab2a0bdac6bf71b08
 # One tree per target, so drafters for different targets never overwrite each other's data.
 EAGLE_ROOT=${EAGLE_ROOT:-$SCRATCH_ROOT/eagle/$TARGET_TAG}
 ROLLOUTS=$EAGLE_ROOT/rollouts/$DATASET               # gen_rollouts.py output (data/train.parquet, stats.json)
-case $DATASET in
-  dapo) MAX_K=4;  MICRO=2; ACCUM=2; EPOCHS=${EPOCHS:-5}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-}  ;;   # ~9k sequences <=4K tokens
+# GEN_ARGS: gen_rollouts.py settings; they must match the RL rollouts this drafter will serve.
+case $DATASET:$TARGET in
+  dapo:r1-distill-7b)
+    # R1-Distill writes long <think> traces: sample its full response (DeepSeek's recommended T 0.6 / top-p 0.95)
+    # but store and train on the first 8K tokens of each row (datagen truncates; ~7.2 KB/token on disk, so
+    # 2,000 rows <= 118 GB). 4 GPUs, one engine replica each.
+    NUM_PROMPTS=${NUM_PROMPTS:-2000}; GEN_MAX_NEW=${GEN_MAX_NEW:-16384}
+    GEN_ARGS="--num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-0.6} --top_p ${GEN_TOP_P:-0.95}"
+    MAX_K=8; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
+  dapo:*)
+    GEN_ARGS="${GEN_ARGS:-}"
+    MAX_K=4;  MICRO=2; ACCUM=2; EPOCHS=${EPOCHS:-5}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-}  ;;   # ~9k sequences <=4K tokens
   # ~2.6k trajectories <=12K tokens (schema prompts). Training truncates to 8K: at 12K the loss's
   # [len x 152064] fp32 tensors (~7 GB each) OOM a 44 GB L40S; 8K kept 94% of generated tokens for Qwen2.5-7B.
-  sql)  MAX_K=12; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-8192} ;;
+  sql:*)
+    GEN_ARGS="${GEN_ARGS:-}"
+    MAX_K=12; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-8192} ;;
   *) echo "DATASET must be dapo or sql"; exit 1 ;;
 esac
 # eagle_trainer.py reads the padding length from the data directory's name (<name>-<N>K)
 HS_ROOT=$EAGLE_ROOT/hidden_states/$DATASET
 HS_DIR=$HS_ROOT/$DATASET-${MAX_K}K
-CKPT_DIR=$EAGLE_ROOT/ckpt/$DATASET                   # DeepSpeed checkpoints, one per epoch
+CKPT_DIR=$EAGLE_ROOT/ckpt/$DATASET                   # DeepSpeed checkpoints, newest 2 epochs kept (--keep_ckpts)
 EXPORT_DIR=$EAGLE_ROOT/drafters/$TARGET_TAG-Eagle-$DATASET   # HF format: use as SPEC_MODEL_PATH
 
 # Local snapshot dir of a pinned revision (downloads on first use).

@@ -44,6 +44,8 @@ def add_args():
     parser.add_argument("--init_draft_path", type=str, default=None,
                         help="EAGLE drafter directory (HF format, e.g. a Qwen2.5-7B-Eagle-RL snapshot) to fine-tune from")
     parser.add_argument("--validate", action="store_true", help="Run validation after every epoch")
+    parser.add_argument("--keep_ckpts", type=int, default=0,
+                        help="Keep only the newest N per-epoch DeepSpeed checkpoints (0 = keep all)")
     parser.add_argument("--max_seq_len", type=int, default=None,
                         help="Pad/truncate every sample to this length (default: from the data directory name, <name>-<N>K)")
     parser = deepspeed.add_config_arguments(parser)
@@ -505,6 +507,16 @@ class EagleTrainerDeepSpeed:
 
             if self.rank == 0:
                 logger.info(f"Checkpoint saved at epoch {epoch}: {self.args.output_dir}")
+                if self.args.keep_ckpts > 0:
+                    # Each checkpoint holds the frozen embed/lm_head too (~7.5 GB); resume reads `latest`.
+                    import re
+                    import shutil
+
+                    tags = sorted((d for d in os.listdir(self.args.output_dir) if re.fullmatch(r"global_step\d+", d)),
+                                  key=lambda d: int(d[len("global_step"):]))
+                    for old in tags[: -self.args.keep_ckpts]:
+                        shutil.rmtree(os.path.join(self.args.output_dir, old), ignore_errors=True)
+                        logger.info(f"Removed old checkpoint {old}")
 
     def validate(self, epoch, tracking):
         self.model_engine.eval()

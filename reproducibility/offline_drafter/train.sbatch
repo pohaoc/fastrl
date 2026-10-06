@@ -69,6 +69,7 @@ torchrun --standalone --nproc_per_node="$NGPU" eagle_trainer.py \
     --epochs "$EPOCHS" \
     --precision bf16 \
     --validate \
+    --keep_ckpts 2 \
     ${TRAIN_MAX_LEN:+--max_seq_len "$TRAIN_MAX_LEN"}
 
 python "$REPO/reproducibility/offline_drafter/export_drafter.py" --ckpt "$CKPT_DIR" --out "$EXPORT_DIR" \

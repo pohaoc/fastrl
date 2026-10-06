@@ -18,7 +18,8 @@ REPO=${FASTRL_REPO:-$SLURM_SUBMIT_DIR}
 source "$REPO/reproducibility/offline_drafter/paths.sh"
 TARGET_DIR=$(snapshot "$TARGET_MODEL" "$TARGET_REVISION")
 export HF_HUB_OFFLINE=1
-echo "job=$SLURM_JOB_ID node=$(hostname) DATASET=$DATASET target=$TARGET_DIR out=$ROLLOUTS commit=$(git -C "$REPO" rev-parse HEAD)"
+echo "job=$SLURM_JOB_ID node=$(hostname) DATASET=$DATASET target=$TARGET_DIR out=$ROLLOUTS gen_args=$GEN_ARGS commit=$(git -C "$REPO" rev-parse HEAD)"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 cd "$REPO"
-python reproducibility/offline_drafter/gen_rollouts.py --dataset "$DATASET" --model "$TARGET_DIR" --out "$ROLLOUTS" "$@"
+python reproducibility/offline_drafter/gen_rollouts.py --dataset "$DATASET" --model "$TARGET_DIR" --out "$ROLLOUTS" \
+    --dp "$(nvidia-smi -L | wc -l)" $GEN_ARGS "$@"
