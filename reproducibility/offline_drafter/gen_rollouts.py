@@ -34,43 +34,76 @@ def engine_for(args, context_length):
     return sgl.Engine(
         model_path=args.model,
         tp_size=1,
-        dp_size=args.dp,   # one engine replica per GPU
         mem_fraction_static=args.mem_fraction,
         context_length=context_length,
+        # Cap concurrency so every running request fits in the KV pool even at the full response length: SGLang
+        # then never retracts (evicts and requeues) requests, the path whose KV accounting failed in job 7060958.
+        max_running_requests=args.max_running,
         attention_backend=args.attention_backend,  # flashinfer's JIT is broken in this env
         random_seed=args.seed,
         log_level="warning",
     )
 
 
-def gen_dapo(args, tok):
+def dapo_split(args):
     df = pd.read_parquet(os.path.join(args.data_root, "DAPO-Math-17k", "train.parquet"))
     perm = np.random.default_rng(args.seed).permutation(len(df))
     train_idx, heldout_idx = perm[: args.num_prompts], perm[args.num_prompts :]
-    df.iloc[heldout_idx].to_parquet(os.path.join(args.out, "heldout.parquet"))
-    prompts = [tok.apply_chat_template(list(df.iloc[i]["prompt"]), add_generation_prompt=True, tokenize=True)
-               for i in train_idx]
-    engine = engine_for(args, context_length=max(len(p) for p in prompts) + args.max_new_tokens + 16)
-    t0 = time.time()
-    outs = engine.generate(
-        input_ids=prompts,
-        sampling_params={"temperature": args.temperature, "top_p": args.top_p, "max_new_tokens": args.max_new_tokens},
-    )
-    print(f"generated {len(outs)} responses in {time.time() - t0:.0f} s")
+    chunks = [train_idx[k : k + args.chunk] for k in range(0, len(train_idx), args.chunk)]
+    return df, chunks, heldout_idx
+
+
+def part_path(args, k):
+    return os.path.join(args.out, "parts", f"chunk_{k:04d}.parquet")
+
+
+def gen_dapo_worker(args, tok):
+    """One process per GPU: generate this shard's chunks of prompts, writing each chunk as soon as it is done.
+    Chunks already on disk are skipped, so a rerun resumes after a crash."""
+    df, chunks, _ = dapo_split(args)
+    os.makedirs(os.path.join(args.out, "parts"), exist_ok=True)
+    mine = [k for k in range(len(chunks)) if k % args.num_shards == args.shard and not os.path.exists(part_path(args, k))]
+    print(f"shard {args.shard}/{args.num_shards}: {len(mine)} chunks to generate", flush=True)
+    if not mine:
+        return
+    tmpl = lambda i: tok.apply_chat_template(list(df.iloc[i]["prompt"]), add_generation_prompt=True, tokenize=True)  # noqa: E731
+    max_prompt = max(len(tmpl(i)) for c in chunks for i in c)
+    engine = engine_for(args, context_length=max_prompt + args.max_new_tokens + 16)
+    sampling = {"temperature": args.temperature, "top_p": args.top_p, "max_new_tokens": args.max_new_tokens}
+    for k in mine:
+        idx = chunks[k]
+        prompts = [tmpl(i) for i in idx]
+        t0 = time.time()
+        outs = engine.generate(input_ids=prompts, sampling_params=sampling)
+        rows = []
+        for i, p, o in zip(idx, prompts, outs):
+            # SGLang (tokenizer enabled) prefixes output_ids with up to 5 context tokens; keep the generated ones
+            out_ids = list(o["output_ids"])
+            n_gen = int(o["meta_info"]["completion_tokens"])
+            out_ids = out_ids[len(out_ids) - n_gen :] if n_gen > 0 else []
+            fin = o["meta_info"]["finish_reason"]
+            rows.append({
+                "index": int(i), "input_ids": list(p) + out_ids, "loss_mask": [0] * len(p) + [1] * len(out_ids),
+                "prompt_len": len(p), "response_len": len(out_ids),
+                "finish_reason": fin.get("type") if isinstance(fin, dict) else str(fin), "response": o["text"],
+            })
+        tmp = part_path(args, k) + ".tmp"
+        pd.DataFrame(rows).to_parquet(tmp)
+        os.replace(tmp, part_path(args, k))
+        n_tok = sum(r["response_len"] for r in rows)
+        print(f"shard {args.shard}: chunk {k} done, {len(rows)} rows, {n_tok} tokens in {time.time() - t0:.0f} s "
+              f"({n_tok / (time.time() - t0):.0f} tok/s)", flush=True)
     engine.shutdown()
-    rows = []
-    for i, p, o in zip(train_idx, prompts, outs):
-        # SGLang (tokenizer enabled) prefixes output_ids with up to 5 context tokens; keep the generated ones
-        out_ids = list(o["output_ids"])
-        n_gen = int(o["meta_info"]["completion_tokens"])
-        out_ids = out_ids[len(out_ids) - n_gen :] if n_gen > 0 else []
-        fin = o["meta_info"]["finish_reason"]
-        rows.append({
-            "index": int(i), "input_ids": list(p) + out_ids, "loss_mask": [0] * len(p) + [1] * len(out_ids),
-            "prompt_len": len(p), "response_len": len(out_ids),
-            "finish_reason": fin.get("type") if isinstance(fin, dict) else str(fin), "response": o["text"],
-        })
-    return rows
+
+
+def merge_dapo(args):
+    """Join the chunk files into data/train.parquet (and write the held-out prompts); fails if any chunk is missing."""
+    df, chunks, heldout_idx = dapo_split(args)
+    missing = [k for k in range(len(chunks)) if not os.path.exists(part_path(args, k))]
+    if missing:
+        raise SystemExit(f"{len(missing)} of {len(chunks)} chunks missing: {missing}")
+    df.iloc[heldout_idx].to_parquet(os.path.join(args.out, "heldout.parquet"))
+    return pd.concat([pd.read_parquet(part_path(args, k)) for k in range(len(chunks))]).to_dict("records")
 
 
 def gen_sql(args, tok):
@@ -126,7 +159,11 @@ def main():
     ap.add_argument("--max_new_tokens", type=int, default=3584, help="DAPO: response cap (datagen truncates rows to its max length)")
     ap.add_argument("--temperature", type=float, default=0.9, help="DAPO: the RL rollout temperature for this target")
     ap.add_argument("--top_p", type=float, default=1.0, help="DAPO: the RL rollout top-p for this target")
-    ap.add_argument("--dp", type=int, default=1, help="data-parallel engine replicas (one per GPU)")
+    ap.add_argument("--shard", type=int, default=0, help="DAPO: this worker's shard (one worker process per GPU)")
+    ap.add_argument("--num_shards", type=int, default=1)
+    ap.add_argument("--chunk", type=int, default=100, help="DAPO: prompts per chunk file")
+    ap.add_argument("--merge", action="store_true", help="DAPO: join the chunk files instead of generating")
+    ap.add_argument("--max_running", type=int, default=None, help="max concurrent requests per engine")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mem_fraction", type=float, default=0.85)
     ap.add_argument("--attention_backend", default="fa3")
@@ -136,7 +173,10 @@ def main():
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    rows = (gen_dapo if args.dataset == "dapo" else gen_sql)(args, tok)
+    if args.dataset == "dapo" and not args.merge:
+        gen_dapo_worker(args, tok)
+        return
+    rows = merge_dapo(args) if args.dataset == "dapo" else gen_sql(args, tok)
     out = pd.DataFrame(rows)
     out.to_parquet(os.path.join(args.out, "data", "train.parquet"))
 

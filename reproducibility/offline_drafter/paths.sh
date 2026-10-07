@@ -32,9 +32,10 @@ case $DATASET:$TARGET in
   dapo:r1-distill-7b)
     # R1-Distill writes long <think> traces: sample its full response (DeepSeek's recommended T 0.6 / top-p 0.95)
     # but store and train on the first 8K tokens of each row (datagen truncates; ~7.2 KB/token on disk, so
-    # 2,000 rows <= 118 GB). 4 GPUs, one engine replica each.
+    # 2,000 rows <= 118 GB). 4 GPUs, one worker process each (gen.sbatch).
     NUM_PROMPTS=${NUM_PROMPTS:-2000}; GEN_MAX_NEW=${GEN_MAX_NEW:-16384}
-    GEN_ARGS="--num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-0.6} --top_p ${GEN_TOP_P:-0.95}"
+    # --max_running 24: 24 x (16K + prompt) fits the ~429K-token KV pool of one L40S at mem 0.85, so no retraction.
+    GEN_ARGS="--num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-0.6} --top_p ${GEN_TOP_P:-0.95} --max_running 24"
     MAX_K=8; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
   dapo:*)
     GEN_ARGS="${GEN_ARGS:-}"

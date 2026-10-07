@@ -21,5 +21,23 @@ export HF_HUB_OFFLINE=1
 echo "job=$SLURM_JOB_ID node=$(hostname) DATASET=$DATASET target=$TARGET_DIR out=$ROLLOUTS gen_args=$GEN_ARGS commit=$(git -C "$REPO" rev-parse HEAD)"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 cd "$REPO"
-python reproducibility/offline_drafter/gen_rollouts.py --dataset "$DATASET" --model "$TARGET_DIR" --out "$ROLLOUTS" \
-    --dp "$(nvidia-smi -L | wc -l)" $GEN_ARGS "$@"
+G="python reproducibility/offline_drafter/gen_rollouts.py --dataset $DATASET --model $TARGET_DIR --out $ROLLOUTS"
+if [ "$DATASET" = dapo ]; then
+    # One independent worker per GPU; each writes 100-prompt chunk files as they finish. A crashed worker loses
+    # only its unfinished chunk: pass 2 regenerates whatever is missing, then the chunks are merged.
+    NGPU=$(nvidia-smi -L | wc -l)
+    merged=0
+    for pass in 1 2; do
+        for i in $(seq 0 $((NGPU - 1))); do
+            CUDA_VISIBLE_DEVICES=$i $G --shard "$i" --num_shards "$NGPU" $GEN_ARGS "$@" \
+                > "$ROLLOUTS/worker$i.pass$pass.log" 2>&1 &
+        done
+        wait
+        grep -h "chunk .* done\|chunks to generate" "$ROLLOUTS"/worker*.pass$pass.log | tail -n 8
+        if $G --merge $GEN_ARGS "$@"; then merged=1; break; fi
+        echo "pass $pass left chunks missing; worker log tails:"; tail -n 5 "$ROLLOUTS"/worker*.pass$pass.log
+    done
+    [ "$merged" = 1 ] || { echo "chunks still missing after 2 passes"; exit 1; }
+else
+    $G $GEN_ARGS "$@"
+fi
