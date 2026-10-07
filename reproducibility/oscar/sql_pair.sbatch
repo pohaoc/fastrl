@@ -4,6 +4,7 @@
 #   2. sdoff : speculative.enable=false (TLT baseline, speculation off)
 # Identical settings otherwise (run_grpo_sql.sh); same seed, so step 1 sees the same prompts.
 #   STEPS=10 sbatch reproducibility/oscar/sql_pair.sbatch       (submit from the repo root)
+#   35 steps: STEPS=35 sbatch --time=32:00:00 reproducibility/oscar/sql_pair.sbatch  (~14 h per arm on L40S)
 # Per-arm logs: $RUN_ROOT/sql_pair/<jobid>/<arm>.log; compare with reproducibility/oscar/compare_runs.py.
 #SBATCH --job-name=sql-pair-l40s
 #SBATCH --partition=gpu-he
@@ -35,7 +36,10 @@ arm() {  # name SD [Hydra overrides...]
     local name=$1 sd=$2
     shift 2
     export RAY_TMPDIR=/tmp/ray-$SLURM_JOB_ID-$name
-    mkdir -p "$RAY_TMPDIR"
+    # Per-iteration scheduler log inside the RL rollouts (sglang/srt/fastrl_steplog.py; Ray workers inherit it):
+    # acceptance and time by running batch size for every RL step. Same cost in both arms.
+    export FASTRL_STEPLOG_DIR=$BASE/$name/steplog
+    mkdir -p "$RAY_TMPDIR" "$FASTRL_STEPLOG_DIR"
     echo; echo "=================== $name (SD=$sd) $(date +%T)"
     SD=$sd SPEC_MODEL_PATH=$DRAFTER OUT=$BASE/$name NAME=coder7b-sql-$name \
         bash reproducibility/oscar/run_grpo_sql.sh "$@" > "$BASE/$name.log" 2>&1
