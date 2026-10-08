@@ -2,7 +2,8 @@
 # Paired SkyRL-SQL RL comparison on ONE 4x L40S node, arms run back to back (same node = no node-speed confound):
 #   1. sdon  : FastRL adaptive speculative decoding with our offline-trained Coder-7B-Instruct drafter
 #   2. sdoff : speculative.enable=false (TLT baseline, speculation off)
-# Identical settings otherwise (run_grpo_sql.sh); same seed, so step 1 sees the same prompts.
+# Identical settings otherwise (run_grpo_sql.sh, which matches the SysX SQL sync configuration on every shared
+# parameter); same seed, so step 1 sees the same prompts.
 #   STEPS=10 sbatch reproducibility/oscar/sql_pair.sbatch       (submit from the repo root)
 #   35 steps: STEPS=35 sbatch --time=32:00:00 reproducibility/oscar/sql_pair.sbatch  (~14 h per arm on L40S)
 # Per-arm logs: $RUN_ROOT/sql_pair/<jobid>/<arm>.log; compare with reproducibility/oscar/compare_runs.py.
@@ -21,6 +22,8 @@ set -uo pipefail
 REPO=${FASTRL_REPO:-$SLURM_SUBMIT_DIR}
 cd "$REPO"
 source reproducibility/oscar/env.sh
+# 2048 SkyRL env workers (the SysX SQL setting) exceed the default soft thread limit (4096 incl. Ray/SGLang/torch).
+ulimit -u "$(ulimit -Hu)"
 export STEPS=${STEPS:-10}
 DRAFTER=${DRAFTER:-$SCRATCH_ROOT/eagle/Qwen2.5-Coder-7B-Instruct/drafters/Qwen2.5-Coder-7B-Instruct-Eagle-sql}
 BASE=$RUN_ROOT/sql_pair/$SLURM_JOB_ID

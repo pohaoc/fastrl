@@ -460,6 +460,8 @@ class SGLangRollout(BaseRollout):
         first_rank_in_node = self._tp_rank % tp_size_per_node == 0
         engine_kwargs = self.config.get("engine_kwargs", {}).get("sglang", {})
         attention_backend = engine_kwargs.get("attention_backend", None)
+        # Any other non-null engine_kwargs.sglang.* entry (e.g. chunked_prefill_size) is passed to the engine.
+        extra_engine_kwargs = {k: v for k, v in engine_kwargs.items() if k != "attention_backend" and v is not None}
 
         if first_rank_in_node:
             rank = dist.get_rank()
@@ -497,6 +499,7 @@ class SGLangRollout(BaseRollout):
                 # In async mode, we want token in token out.
                 skip_tokenizer_init=self.config.mode == "async",
                 **self.speculative_args,
+                **extra_engine_kwargs,
             )
         else:
             self._engine = None
