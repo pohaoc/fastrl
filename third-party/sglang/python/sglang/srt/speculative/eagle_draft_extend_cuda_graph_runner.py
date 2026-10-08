@@ -4,6 +4,7 @@ import bisect
 from typing import TYPE_CHECKING, Callable
 
 import torch
+from sglang.srt import fastrl_sd_memory
 from sglang.srt.layers.dp_attention import DpPaddingMode, set_dp_buffer_len
 from sglang.srt.model_executor.cuda_graph_runner import (
     CUDA_GRAPH_CAPTURE_FAILED_MSG,
@@ -307,7 +308,10 @@ class EAGLEDraftExtendCudaGraphRunner:
         with torch.cuda.graph(
             graph, pool=get_global_graph_memory_pool(), stream=stream
         ):
-            out = run_once()
+            with fastrl_sd_memory.graph_capture_region(
+                self.model_runner.memory_saver_adapter, self.model_runner.server_args
+            ):
+                out = run_once()
 
         set_global_graph_memory_pool(graph.pool())
         return graph, out

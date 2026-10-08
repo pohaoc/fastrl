@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import torch
 import tqdm
+from sglang.srt import fastrl_sd_memory
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.distributed import get_tensor_model_parallel_rank
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
@@ -526,7 +527,10 @@ class CudaGraphRunner:
 
     def _capture_graph(self, graph, pool, stream, run_once_fn):
         with self.device_module.graph(graph, pool=pool, stream=stream):
-            out = run_once_fn()
+            with fastrl_sd_memory.graph_capture_region(
+                self.model_runner.memory_saver_adapter, self.model_runner.server_args
+            ):
+                out = run_once_fn()
         return out
 
     def _create_device_graph(self):

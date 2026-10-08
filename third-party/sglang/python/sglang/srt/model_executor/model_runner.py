@@ -38,7 +38,10 @@ from sglang.srt.configs.model_config import (
     is_deepseek_nsa,
 )
 from sglang.srt.configs.update_config import adjust_config_with_unaligned_cpu_tp
-from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+import contextlib
+
+from sglang.srt import fastrl_sd_memory
+from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS, GPU_MEMORY_TYPE_WEIGHTS_DRAFTER
 from sglang.srt.distributed import (
     get_pp_group,
     get_tp_group,
@@ -854,11 +857,17 @@ class ModelRunner:
                     device_config=DeviceConfig(self.device, self.gpu_id),
                 )
         else:
-            self.model = get_model(
-                model_config=self.model_config,
-                load_config=self.load_config,
-                device_config=DeviceConfig(self.device, self.gpu_id),
-            )
+            # FastRL: pausable drafter weights with a CPU backup (fastrl_sd_memory.py); verl never re-pushes them.
+            with (
+                self.memory_saver_adapter.region(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER, enable_cpu_backup=True)
+                if fastrl_sd_memory.enabled(self.server_args)
+                else contextlib.nullcontext()
+            ):
+                self.model = get_model(
+                    model_config=self.model_config,
+                    load_config=self.load_config,
+                    device_config=DeviceConfig(self.device, self.gpu_id),
+                )
 
         monkey_patch_vllm_parallel_state(reverse=True)
         monkey_patch_isinstance_for_vllm_base_layer(reverse=True)

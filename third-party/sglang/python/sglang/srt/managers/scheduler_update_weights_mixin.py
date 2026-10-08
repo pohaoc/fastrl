@@ -4,7 +4,9 @@ import logging
 from typing import TYPE_CHECKING, Tuple
 
 import torch
+from sglang.srt import fastrl_sd_memory
 from sglang.srt.constants import (
+    GPU_MEMORY_TYPE_CUDA_GRAPH,
     GPU_MEMORY_TYPE_KV_CACHE,
     GPU_MEMORY_TYPE_WEIGHTS,
     GPU_MEMORY_TYPE_WEIGHTS_DRAFTER,
@@ -119,6 +121,10 @@ class SchedulerUpdateWeightsMixin:
             )
             torch.distributed.barrier(self.tp_cpu_group)
             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS)
+            if fastrl_sd_memory.enabled(self.server_args):
+                # FastRL: the SD engine's drafter weights (backed up to CPU) and CUDA graphs (scratch).
+                self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER)
+                self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
 
         return ReleaseMemoryOccupationReqOutput()
 
@@ -137,6 +143,9 @@ class SchedulerUpdateWeightsMixin:
 
         if GPU_MEMORY_TYPE_WEIGHTS in tags:
             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
+            if fastrl_sd_memory.enabled(self.server_args):
+                self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
+                self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER)
             torch.distributed.barrier(self.tp_cpu_group)
             _import_static_state(
                 self.tp_worker.model_runner.model,
