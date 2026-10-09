@@ -26,6 +26,7 @@ if [ "$DATASET" = dapo ]; then
     # One independent worker per GPU; each writes 100-prompt chunk files as they finish. A crashed worker loses
     # only its unfinished chunk: pass 2 regenerates whatever is missing, then the chunks are merged.
     NGPU=$(nvidia-smi -L | wc -l)
+    mkdir -p "$ROLLOUTS"   # the worker logs below are redirected into it before any worker creates it (job 7183332)
     merged=0
     for pass in 1 2; do
         for i in $(seq 0 $((NGPU - 1))); do
