@@ -16,9 +16,14 @@ import subprocess
 import time
 
 
+SMI_INDEX = None  # set by --smi_index: report only the GPU this engine runs on
+
+
 def gpu_used_mib():
-    out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                         capture_output=True, text=True, check=True).stdout
+    cmd = ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
+    if SMI_INDEX is not None:
+        cmd += ["-i", str(SMI_INDEX)]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return [int(x) for x in out.split()]
 
 
@@ -31,8 +36,14 @@ def main():
     ap.add_argument("--n_greedy", type=int, default=6)
     ap.add_argument("--n_batch", type=int, default=64)
     ap.add_argument("--cycles", type=int, default=2)
+    ap.add_argument("--tp", type=int, default=4)
+    ap.add_argument("--mem", type=float, default=0.4, help="mem_fraction_static")
+    ap.add_argument("--chunked_prefill", type=int, default=None)
+    ap.add_argument("--smi_index", type=int, default=None, help="nvidia-smi index of the GPU this engine uses")
     ap.add_argument("--parquet", default=os.path.join(os.environ.get("DATA_ROOT", "."), "SkyRL-SQL", "train.parquet"))
     args = ap.parse_args()
+    global SMI_INDEX
+    SMI_INDEX = args.smi_index
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     import pandas as pd
@@ -44,8 +55,8 @@ def main():
     prompts = [tok.apply_chat_template(list(m), add_generation_prompt=True, tokenize=False) for m in df.prompt]
     greedy_p, batch_p = prompts[: args.n_greedy], prompts[args.n_greedy:]
 
-    kw = dict(model_path=args.model, dtype="bfloat16", mem_fraction_static=0.4, enable_memory_saver=True,
-              enable_weights_cpu_backup=True, tp_size=4, load_format="auto", mm_attention_backend="fa3",
+    kw = dict(model_path=args.model, dtype="bfloat16", mem_fraction_static=args.mem, enable_memory_saver=True,
+              enable_weights_cpu_backup=True, tp_size=args.tp, load_format="auto", mm_attention_backend="fa3",
               attention_backend="fa3", random_seed=0, log_level="warning")
     if args.sd:
         kw.update(speculative_algorithm="EAGLE", speculative_draft_model_path=args.drafter,
@@ -53,11 +64,15 @@ def main():
                   speculative_eagle_mab_algorithm="BEG", apdative_speculative_batch_size_threshold=32,
                   speculative_eagle_mab_configs=["8_4_32", "8_4_16", "8_4_8"], speculative_mab_bs_threshold=[1, 2, 5, 21],
                   max_running_requests=512, cuda_graph_max_bs=32, disable_overlap_schedule=True)
-    res = {"sd": args.sd, "release_sd_memory": os.environ.get("FASTRL_RELEASE_SD_MEMORY", "1"), "phase": "init"}
+    if args.chunked_prefill:
+        kw["chunked_prefill_size"] = args.chunked_prefill
+    res = {"sd": args.sd, "tp": args.tp, "mem": args.mem, "release_sd_memory": os.environ.get("FASTRL_RELEASE_SD_MEMORY", "1"), "phase": "init"}
     save = lambda: json.dump(res, open(args.out, "w"), indent=2)  # noqa: E731
     save()
     mib0 = gpu_used_mib()
     engine = sgl.Engine(**kw)
+    info = engine.get_server_info()
+    res["engine"] = {k: info.get(k) for k in ("max_total_num_tokens", "max_running_requests", "cuda_graph_max_bs")}
 
     def greedy():
         out = []
@@ -101,7 +116,7 @@ def main():
                accept_before=round(sum(b["tokens"] for b in before) / max(1, sum(b["verify_ct"] for b in before)), 3),
                accept_after=round(sum(a["tokens"] for a in after) / max(1, sum(a["verify_ct"] for a in after)), 3))
     save()
-    print("RESULT", json.dumps({k: res[k] for k in ("sd", "release_sd_memory", "mem_mib", "greedy_identical",
+    print("RESULT", json.dumps({k: res[k] for k in ("sd", "tp", "mem", "engine", "release_sd_memory", "mem_mib", "greedy_identical",
                                                     "greedy_total", "accept_before", "accept_after", "release_s", "resume_s")}))
 
 
