@@ -11,6 +11,10 @@ When it applies (memory saver on, a speculative algorithm set, FASTRL_RELEASE_SD
     replay rewrites; the graphs' static input buffers live outside the pool);
   - both are paused together with "weights" and resumed together with it.
 Engines without speculation are unchanged.
+
+CUDA-graph release is OPT-IN (FASTRL_RELEASE_SD_GRAPHS=1): capturing graphs inside a torch_memory_saver region
+(0.0.9rc2, preload hook) broke the caching allocator in job 7170795 (torch.cuda.empty_cache -> "CUDA error:
+invalid argument" right after the first MAB graph group was captured). Drafter-weight release stays on.
 """
 
 import os
@@ -27,13 +31,17 @@ def enabled(server_args) -> bool:
     )
 
 
+def graphs_enabled(server_args) -> bool:
+    return enabled(server_args) and os.environ.get("FASTRL_RELEASE_SD_GRAPHS", "0") == "1"
+
+
 @contextmanager
 def graph_capture_region(memory_saver_adapter, server_args):
     """Use inside a torch.cuda.graph(...) block, around the captured forward (as torch_memory_saver.cuda_graph
     does), so the graph pool's allocations become pausable."""
     ctx = (
         memory_saver_adapter.region(GPU_MEMORY_TYPE_CUDA_GRAPH)
-        if enabled(server_args) and memory_saver_adapter.enabled
+        if graphs_enabled(server_args) and memory_saver_adapter.enabled
         else nullcontext()
     )
     with ctx:

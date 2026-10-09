@@ -124,7 +124,8 @@ class SchedulerUpdateWeightsMixin:
             if fastrl_sd_memory.enabled(self.server_args):
                 # FastRL: the SD engine's drafter weights (backed up to CPU) and CUDA graphs (scratch).
                 self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER)
-                self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
+                if fastrl_sd_memory.graphs_enabled(self.server_args):
+                    self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
 
         return ReleaseMemoryOccupationReqOutput()
 
@@ -144,7 +145,8 @@ class SchedulerUpdateWeightsMixin:
         if GPU_MEMORY_TYPE_WEIGHTS in tags:
             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
             if fastrl_sd_memory.enabled(self.server_args):
-                self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
+                if fastrl_sd_memory.graphs_enabled(self.server_args):
+                    self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
                 self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER)
             torch.distributed.barrier(self.tp_cpu_group)
             _import_static_state(
