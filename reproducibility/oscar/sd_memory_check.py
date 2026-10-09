@@ -71,8 +71,10 @@ def main():
     save()
     mib0 = gpu_used_mib()
     engine = sgl.Engine(**kw)
-    info = engine.get_server_info()
-    res["engine"] = {k: info.get(k) for k in ("max_total_num_tokens", "max_running_requests", "cuda_graph_max_bs")}
+    # engine.scheduler_info, not get_server_info(): the latter waits on a reply loop that SGLang only starts with the
+    # first generate call, so right after start-up it blocks forever (job 7225251).
+    info = engine.scheduler_info or {}
+    res["engine"] = {k: info.get(k) for k in ("max_total_num_tokens", "max_req_input_len")}
 
     def greedy():
         out = []
