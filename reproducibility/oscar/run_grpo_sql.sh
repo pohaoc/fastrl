@@ -12,8 +12,9 @@ set -euo pipefail
 STEPS=${STEPS:-10}
 ATTN=${ATTN:-fa3}
 TP=${TP:-1}       # SYNC vllm_tp_size = 1: four single-GPU engines
-MEM=${MEM:-0.85}  # SYNC vllm_gpu_util = 0.9 counts all engine memory; sglang's mem_fraction_static counts weights +
-                  # KV only, so 0.85 leaves the rest (~10% of the GPU) for CUDA graphs and activations
+MEM=${MEM:-0.70}  # SYNC vllm_gpu_util = 0.9. One fraction for both arms: the highest at which the SD engine fits at
+                  # TP 1 on a 44 GB L40S with headroom (sweep job 7226017: 0.85 fails at start-up, 0.80 on the first
+                  # batch, 0.75 runs at 43.6/44.4 GB). sglang's fraction counts weights + KV only.
 MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('Qwen/Qwen2.5-Coder-7B-Instruct', revision='c03e6d358207e414f1eca0bb1891e29f1db0e242'))")
 SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-$(python -c "from huggingface_hub import snapshot_download as s; print(s('mit-han-lab/Qwen2.5-7B-Eagle-RL', revision='38905764986fdd43c64f0b5ab2a0bdac6bf71b08'))")}
 export HF_HUB_OFFLINE=1
