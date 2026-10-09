@@ -5,16 +5,18 @@
 # matches their synchronous configuration, ~/scratch/runs/fresh-sql-sync-8065792/run_config.toml ("SYNC" below).
 # Deviations from examples/grpo_7B.sh are marked "# DEV:".
 # Called by grpo_sql.sbatch / sql_pair.sbatch (env.sh already sourced). Env:
-#   SD=true|false  SPEC_MODEL_PATH=<drafter dir>  STEPS  ATTN (fa3)  TP (1)  MEM (0.85)  OUT (run dir)  NAME
+#   SD=true|false  SPEC_MODEL_PATH=<drafter dir>  STEPS  ATTN (fa3)  TP (1)  MEM (per arm, see below)  OUT  NAME
 # Extra arguments are Hydra overrides.
 set -euo pipefail
 : "${SD:?}" "${OUT:?}" "${NAME:?}"
 STEPS=${STEPS:-10}
 ATTN=${ATTN:-fa3}
 TP=${TP:-1}       # SYNC vllm_tp_size = 1: four single-GPU engines
-MEM=${MEM:-0.70}  # SYNC vllm_gpu_util = 0.9. One fraction for both arms: the highest at which the SD engine fits at
-                  # TP 1 on a 44 GB L40S with headroom (sweep job 7226017: 0.85 fails at start-up, 0.80 on the first
-                  # batch, 0.75 runs at 43.6/44.4 GB). sglang's fraction counts weights + KV only.
+# KV cache matched to SYNC's: vLLM at vllm_gpu_util 0.9, TP 1 gives 387,184 KV tokens per GPU (SysX rp-sql run log).
+# sglang's mem_fraction_static counts weights + KV only and sizes the pool differently with and without
+# speculation, so the fraction that reproduces that pool differs per arm (sweep job 7226017, TP 1, L40S):
+#   SD off 0.80 -> 387,866 tokens;  SD on 0.75 -> 387,826 tokens (43.6 of 44.4 GB in use while generating).
+if [ "$SD" = true ]; then MEM=${MEM:-0.75}; else MEM=${MEM:-0.80}; fi
 MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('Qwen/Qwen2.5-Coder-7B-Instruct', revision='c03e6d358207e414f1eca0bb1891e29f1db0e242'))")
 SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-$(python -c "from huggingface_hub import snapshot_download as s; print(s('mit-han-lab/Qwen2.5-7B-Eagle-RL', revision='38905764986fdd43c64f0b5ab2a0bdac6bf71b08'))")}
 export HF_HUB_OFFLINE=1
