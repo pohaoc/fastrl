@@ -4,7 +4,9 @@
 #   2. sdoff : speculative.enable=false (TLT baseline, speculation off)
 # Identical settings otherwise (run_grpo_dapo.sh, which matches the SysX DAPO sync configuration on every shared
 # parameter); same seed, so step 1 sees the same prompts.
-#   STEPS=10 sbatch reproducibility/oscar/dapo_pair.sbatch       (submit from the repo root)
+#   sbatch reproducibility/oscar/dapo_pair.sbatch       (submit from the repo root; STEPS=20 by default)
+# 20 RL steps per arm (SysX's DAPO runs used max_steps = 10, at 16-22 min/step on 4x H100; the first 10 steps are
+# directly comparable). Expect ~12 h per arm.
 # Per-arm logs: $RUN_ROOT/dapo_pair/<jobid>/<arm>.log; compare with reproducibility/oscar/compare_runs.py.
 #SBATCH --job-name=dapo-pair-h100
 #SBATCH --partition=gpu-he
@@ -14,14 +16,14 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=500G
-#SBATCH --time=20:00:00
+#SBATCH --time=40:00:00
 #SBATCH --output=/oscar/scratch/%u/jobs/%x-%j.out
 set -uo pipefail
 REPO=${FASTRL_REPO:-$SLURM_SUBMIT_DIR}
 cd "$REPO"
 source reproducibility/oscar/env.sh
 ulimit -u "$(ulimit -Hu)"   # Ray + SGLang + torch threads; same as the SQL pair
-export STEPS=${STEPS:-10}
+export STEPS=${STEPS:-20}
 DRAFTER=${DRAFTER:-$SCRATCH_ROOT/eagle/DeepSeek-R1-Distill-Llama-8B/drafters/DeepSeek-R1-Distill-Llama-8B-Eagle-dapo}
 BASE=$RUN_ROOT/dapo_pair/$SLURM_JOB_ID
 mkdir -p "$BASE"

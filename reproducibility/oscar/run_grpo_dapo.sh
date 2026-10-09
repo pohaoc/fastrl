@@ -8,7 +8,7 @@
 # Extra arguments are Hydra overrides.
 set -euo pipefail
 : "${SD:?}" "${OUT:?}" "${NAME:?}"
-STEPS=${STEPS:-10}
+STEPS=${STEPS:-20}   # SysX DAPO sync ran max_steps = 10; we run 20 (the first 10 compare directly)
 ATTN=${ATTN:-fa3}
 TP=${TP:-1}         # SYNC vllm_tp_size = 1: four single-GPU engines
 # SYNC pins the KV cache at vllm_kv_cache_memory_bytes = 59,223,572,480 B = 451,840 tokens of Llama-8B KV
