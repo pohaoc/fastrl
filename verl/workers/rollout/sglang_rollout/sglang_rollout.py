@@ -498,8 +498,8 @@ class SGLangRollout(BaseRollout):
                 attention_backend=attention_backend if attention_backend is not None else "fa3",
                 # In async mode, we want token in token out.
                 skip_tokenizer_init=self.config.mode == "async",
-                **self.speculative_args,
-                **extra_engine_kwargs,
+                # explicit engine_kwargs.sglang.* entries override the speculative defaults (e.g. max_running_requests)
+                **{**self.speculative_args, **extra_engine_kwargs},
             )
         else:
             self._engine = None
