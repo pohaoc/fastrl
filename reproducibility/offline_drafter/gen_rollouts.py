@@ -46,7 +46,13 @@ def engine_for(args, context_length):
 
 
 def dapo_split(args):
-    df = pd.read_parquet(os.path.join(args.data_root, "DAPO-Math-17k", "train.parquet"))
+    df = pd.read_parquet(args.dapo_parquet or os.path.join(args.data_root, "DAPO-Math-17k", "train.parquet"))
+    if args.max_prompt_tokens:   # same filter as the RL runs' max prompt length
+        from transformers import AutoTokenizer
+
+        tok = AutoTokenizer.from_pretrained(args.model)
+        n = [len(tok.apply_chat_template(list(m), add_generation_prompt=True, tokenize=True)) for m in df.prompt]
+        df = df[[x <= args.max_prompt_tokens for x in n]].reset_index(drop=True)
     perm = np.random.default_rng(args.seed).permutation(len(df))
     train_idx, heldout_idx = perm[: args.num_prompts], perm[args.num_prompts :]
     chunks = [train_idx[k : k + args.chunk] for k in range(0, len(train_idx), args.chunk)]
@@ -159,6 +165,8 @@ def main():
     ap.add_argument("--max_new_tokens", type=int, default=3584, help="DAPO: response cap (datagen truncates rows to its max length)")
     ap.add_argument("--temperature", type=float, default=0.9, help="DAPO: the RL rollout temperature for this target")
     ap.add_argument("--top_p", type=float, default=1.0, help="DAPO: the RL rollout top-p for this target")
+    ap.add_argument("--dapo_parquet", default=None, help="DAPO: prompt parquet (default: $DATA_ROOT/DAPO-Math-17k)")
+    ap.add_argument("--max_prompt_tokens", type=int, default=None, help="DAPO: drop longer prompts (chat template on)")
     ap.add_argument("--shard", type=int, default=0, help="DAPO: this worker's shard (one worker process per GPU)")
     ap.add_argument("--num_shards", type=int, default=1)
     ap.add_argument("--chunk", type=int, default=100, help="DAPO: prompts per chunk file")

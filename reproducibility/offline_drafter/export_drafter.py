@@ -2,13 +2,17 @@
 
 The output directory (pytorch_model.bin + config.json) loads anywhere the released drafter does: SGLang
 speculative_draft_model_path, SPEC_MODEL_PATH in the RL launcher.
-  - tensors: same names as --layout (mit-han-lab/Qwen2.5-7B-Eagle-RL: embed_tokens, fc, layers.0.*);
-  - config.json: the TARGET's config with architectures=[Qwen2ForCausalLMEagle] and num_hidden_layers=1, which
-    is exactly how the released drafter's config relates to Qwen2.5-7B's.
+  - tensors: the names of --layout if given (mit-han-lab/Qwen2.5-7B-Eagle-RL: embed_tokens, fc, layers.0.*),
+    otherwise the checkpoint's own embed_tokens / fc / layers.0 tensors without the "model." prefix (the same
+    naming, for targets with no released drafter, e.g. Llama);
+  - fc.bias = zeros: eagle-train's fusion layer has no bias, while SGLang's EAGLE models (qwen2_eagle,
+    llama_eagle) declare one, which a checkpoint without fc.bias leaves at its random initialisation;
+  - config.json: the TARGET's config with architectures=[<Qwen2|Llama>ForCausalLMEagle] and num_hidden_layers=1,
+    which is exactly how the released drafter's config relates to Qwen2.5-7B's.
 embed_tokens must equal the target's (eagle-train loads it from the target and freezes it); this is checked.
 
 Usage: python export_drafter.py --ckpt <eagle_trainer output_dir> --out <dir> --target <target snapshot dir>
-           --layout <released drafter dir> [--init <warm-start drafter dir>] [--tag global_stepN]
+           [--layout <released drafter dir>] [--init <warm-start drafter dir>] [--tag global_stepN]
 """
 
 import argparse
@@ -31,7 +35,7 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--target", required=True, help="target model snapshot dir")
-    ap.add_argument("--layout", required=True, help="released EAGLE drafter dir whose tensor names to reproduce")
+    ap.add_argument("--layout", default=None, help="released EAGLE drafter dir whose tensor names to reproduce")
     ap.add_argument("--init", default=None, help="warm-start drafter dir, to report how far training moved")
     ap.add_argument("--tag", default=None, help="checkpoint tag (default: the 'latest' file)")
     args = ap.parse_args()
@@ -39,7 +43,12 @@ def main():
     tag = args.tag or open(os.path.join(args.ckpt, "latest")).read().strip()
     module = torch.load(os.path.join(args.ckpt, tag, "mp_rank_00_model_states.pt"), map_location="cpu",
                         weights_only=False)["module"]
-    layout = torch.load(os.path.join(args.layout, "pytorch_model.bin"), map_location="cpu", mmap=True, weights_only=True)
+    if args.layout:
+        layout = torch.load(os.path.join(args.layout, "pytorch_model.bin"), map_location="cpu", mmap=True, weights_only=True)
+    else:
+        strip = lambda k: k[len("model."):] if k.startswith("model.") else k  # noqa: E731
+        layout = {strip(k): v for k, v in module.items()
+                  if strip(k).startswith(("embed_tokens.", "fc.", "layers.0.")) and torch.is_tensor(v)}
     init = (torch.load(os.path.join(args.init, "pytorch_model.bin"), map_location="cpu", mmap=True, weights_only=True)
             if args.init else {})
 
@@ -51,11 +60,14 @@ def main():
         out[k] = w.to(v.dtype).contiguous()
         if k in init and "embed_tokens" not in k:
             report[k] = float((out[k].float() - init[k].float()).abs().max())
+    if "fc.bias" not in out:
+        out["fc.bias"] = torch.zeros(out["fc.weight"].shape[0], dtype=out["fc.weight"].dtype)
     embed_diff = float((out["embed_tokens.weight"].float() - target_embed(args.target).float()).abs().max())
     assert embed_diff == 0.0, f"embed_tokens differs from the target's by {embed_diff}: not trained against this target"
 
     cfg = json.load(open(os.path.join(args.target, "config.json")))
-    cfg["architectures"] = ["Qwen2ForCausalLMEagle"]
+    arch = {"qwen2": "Qwen2ForCausalLMEagle", "llama": "LlamaForCausalLMEagle"}[cfg["model_type"]]
+    cfg["architectures"] = [arch]
     cfg["num_hidden_layers"] = 1
     os.makedirs(args.out, exist_ok=True)
     torch.save(out, os.path.join(args.out, "pytorch_model.bin"))

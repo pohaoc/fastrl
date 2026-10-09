@@ -27,7 +27,7 @@ NGPU=$(nvidia-smi -L | wc -l)
 mkdir -p "$CKPT_DIR"
 TARGET_DIR=$(snapshot "$TARGET_MODEL" "$TARGET_REVISION")
 INIT_DIR=; [ "$INIT_DRAFT" = none ] || INIT_DIR=$(snapshot "$INIT_DRAFT" "$INIT_REVISION")
-LAYOUT_DIR=$(snapshot "$LAYOUT_REF" "$LAYOUT_REVISION")
+LAYOUT_DIR=; [ "$LAYOUT_REF" = none ] || LAYOUT_DIR=$(snapshot "$LAYOUT_REF" "$LAYOUT_REVISION")
 export HF_HUB_OFFLINE=1
 N_FILES=$(ls "$HS_DIR" | grep -c '^data_.*\.pt$')
 N_TRAIN=$((N_FILES * 95 / 100))                        # eagle_trainer keeps 5% for validation
@@ -73,5 +73,5 @@ torchrun --standalone --nproc_per_node="$NGPU" eagle_trainer.py \
     ${TRAIN_MAX_LEN:+--max_seq_len "$TRAIN_MAX_LEN"}
 
 python "$REPO/reproducibility/offline_drafter/export_drafter.py" --ckpt "$CKPT_DIR" --out "$EXPORT_DIR" \
-    --target "$TARGET_DIR" --layout "$LAYOUT_DIR" ${INIT_DIR:+--init "$INIT_DIR"}
+    --target "$TARGET_DIR" ${LAYOUT_DIR:+--layout "$LAYOUT_DIR"} ${INIT_DIR:+--init "$INIT_DIR"}
 echo "drafter ready: $EXPORT_DIR"

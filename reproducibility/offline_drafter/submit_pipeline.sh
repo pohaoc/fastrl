@@ -19,7 +19,7 @@ T=${TARGET:-coder}
 for DATASET in "$@"; do
     gen_dep=""
     gen_opts=""   # long reasoning traces: one engine replica per GPU on 4 GPUs
-    [ "$T:$DATASET" = r1-distill-7b:dapo ] && gen_opts="--gres=gpu:l40s:4 --mem=200G --time=08:00:00"
+    case "$T:$DATASET" in r1-distill-7b:dapo|r1-distill-llama-8b:dapo) gen_opts="--gres=gpu:l40s:4 --mem=200G --time=08:00:00" ;; esac
     if [ "$DATASET" = sql ] && [ ! -f "$DATA_ROOT/SkyRL-SQL/train.parquet" ]; then
         j=$(sbatch --parsable $D/prepare_sql.sbatch); echo "prepare_sql: $j"; gen_dep="--dependency=afterok:$j"
     fi

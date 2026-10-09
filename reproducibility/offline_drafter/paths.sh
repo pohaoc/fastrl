@@ -7,22 +7,28 @@ export EAGLE_ENV=${EAGLE_ENV:-$HOME/envs/eagle-train}
 # target's (export_drafter.py); its weights are trained on this model's hidden states.
 #   TARGET=coder          Qwen/Qwen2.5-Coder-7B-Instruct (SkyRL-SQL)
 #   TARGET=r1-distill-7b  deepseek-ai/DeepSeek-R1-Distill-Qwen-7B (DAPO-Math-17k)
+#   TARGET=r1-distill-llama-8b  deepseek-ai/DeepSeek-R1-Distill-Llama-8B (DAPO-Math-17k, as the SysX DAPO runs)
 # TARGET_MODEL / TARGET_REVISION override the preset.
 TARGET=${TARGET:-coder}
+# _I: default warm start (none = random init); _L: released drafter whose tensor names the export reproduces
+# (none = the checkpoint's own names; there is no released FastRL drafter for Llama targets).
 case $TARGET in
-  coder)         _M=Qwen/Qwen2.5-Coder-7B-Instruct;         _R=c03e6d358207e414f1eca0bb1891e29f1db0e242 ;;
-  r1-distill-7b) _M=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B; _R=916b56a44061fd5cd7d6a8fb632557ed4f724f60 ;;
-  *) echo "TARGET must be coder or r1-distill-7b"; exit 1 ;;
+  coder)         _M=Qwen/Qwen2.5-Coder-7B-Instruct;           _R=c03e6d358207e414f1eca0bb1891e29f1db0e242
+                 _I=mit-han-lab/Qwen2.5-7B-Eagle-RL; _L=mit-han-lab/Qwen2.5-7B-Eagle-RL ;;
+  r1-distill-7b) _M=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B;   _R=916b56a44061fd5cd7d6a8fb632557ed4f724f60
+                 _I=mit-han-lab/Qwen2.5-7B-Eagle-RL; _L=mit-han-lab/Qwen2.5-7B-Eagle-RL ;;
+  r1-distill-llama-8b) _M=deepseek-ai/DeepSeek-R1-Distill-Llama-8B; _R=6a6f4aa4197940add57724a7707d069478df56b1
+                 _I=none; _L=none ;;
+  *) echo "TARGET must be coder, r1-distill-7b or r1-distill-llama-8b"; exit 1 ;;
 esac
 TARGET_MODEL=${TARGET_MODEL:-$_M}
 TARGET_REVISION=${TARGET_REVISION:-$_R}
 TARGET_TAG=$(basename "$TARGET_MODEL")
 # Warm start for the trainable drafter weights (fc + decoder layer); INIT_DRAFT=none trains from scratch.
 # embed_tokens / lm_head always come frozen from the target, whatever the warm start.
-INIT_DRAFT=${INIT_DRAFT:-mit-han-lab/Qwen2.5-7B-Eagle-RL}
+INIT_DRAFT=${INIT_DRAFT:-$_I}
 INIT_REVISION=${INIT_REVISION:-38905764986fdd43c64f0b5ab2a0bdac6bf71b08}
-# The released EAGLE checkpoint whose tensor names the export reproduces.
-LAYOUT_REF=mit-han-lab/Qwen2.5-7B-Eagle-RL
+LAYOUT_REF=$_L
 LAYOUT_REVISION=38905764986fdd43c64f0b5ab2a0bdac6bf71b08
 # One tree per target, so drafters for different targets never overwrite each other's data.
 EAGLE_ROOT=${EAGLE_ROOT:-$SCRATCH_ROOT/eagle/$TARGET_TAG}
@@ -36,6 +42,16 @@ case $DATASET:$TARGET in
     NUM_PROMPTS=${NUM_PROMPTS:-2000}; GEN_MAX_NEW=${GEN_MAX_NEW:-16384}
     # --max_running 24: 24 x (16K + prompt) fits the ~429K-token KV pool of one L40S at mem 0.85, so no retraction.
     GEN_ARGS="--num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-0.6} --top_p ${GEN_TOP_P:-0.95} --max_running 24"
+    MAX_K=8; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
+  dapo:r1-distill-llama-8b)
+    # Matches the SysX DAPO runs (~/scratch/runs/dapo-b128-sync-8065792/run_config.toml): their dapo_math17k
+    # (14,116 prompts), prompts <= 1024 tokens, T 1.0 / top-p 1.0. Their responses run to 32000 tokens; training uses
+    # only the first 8K tokens of each row, and the first 8K tokens of a response have the same distribution
+    # whatever the cap, so generation stops at 8K (about 4x faster). --max_running 16: Llama-8B KV is 128 KiB per
+    # token, ~165K tokens per L40S at mem 0.85, and 16 x (8192 + 1024) fits without retraction.
+    NUM_PROMPTS=${NUM_PROMPTS:-2000}; GEN_MAX_NEW=${GEN_MAX_NEW:-8192}
+    GEN_ARGS="--dapo_parquet /oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet --max_prompt_tokens 1024"
+    GEN_ARGS="$GEN_ARGS --num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-1.0} --top_p ${GEN_TOP_P:-1.0} --max_running 16"
     MAX_K=8; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
   dapo:*)
     GEN_ARGS="${GEN_ARGS:-}"
