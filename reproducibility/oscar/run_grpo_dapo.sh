@@ -87,6 +87,7 @@ python3 -m verl.trainer.main_fastrl \
     actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.mode=sync \
     actor_rollout_ref.rollout.gpu_memory_utilization=$MEM \
+    actor_rollout_ref.rollout.multi_stage_wake_up=True \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=1.0 \
     actor_rollout_ref.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
@@ -118,3 +119,5 @@ python3 -m verl.trainer.main_fastrl \
 # n_gpus_per_node 8 -> 4, save_freq -1, total_training_steps, Oscar ray_init.num_cpus. Speculation settings
 # (FastRL defaults) are TLT's own. Training memory strategy (param + optimizer offload) is verl's equivalent of
 # SYNC's trainer offload during rollout + cpu_adam: the pinned 59 GB KV cache needs the GPU while generating.
+# multi_stage_wake_up: push the new weights before re-allocating the KV cache, so the actor's parameters and the
+# KV cache are never on the GPU together (without it both SQL arms ran out of memory in the first wake-up, job 7227378).

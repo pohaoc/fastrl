@@ -85,6 +85,7 @@ python3 -m verl.trainer.main_fastrl \
     actor_rollout_ref.rollout.mode=sync \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.gpu_memory_utilization=$MEM \
+    actor_rollout_ref.rollout.multi_stage_wake_up=True \
     actor_rollout_ref.rollout.temperature=0.6 \
     actor_rollout_ref.rollout.top_p=0.95 \
     actor_rollout_ref.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
@@ -119,3 +120,5 @@ python3 -m verl.trainer.main_fastrl \
 # thread limit in sql_pair.sbatch), chunked_prefill_size 8192 = SYNC vllm_max_num_batched_tokens, engine attention
 # backend (verl forces fa3 when unset, so fa3 == upstream), n_gpus_per_node 8 -> 4, save_freq -1,
 # total_training_steps, Oscar ray_init.num_cpus. Speculation settings (FastRL defaults) are TLT's own.
+# multi_stage_wake_up: push the new weights before re-allocating the KV cache, so the actor's parameters and the
+# KV cache are never on the GPU together (without it both SQL arms ran out of memory in the first wake-up, job 7227378).

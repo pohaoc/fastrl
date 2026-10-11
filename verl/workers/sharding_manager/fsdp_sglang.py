@@ -204,6 +204,17 @@ class FSDPSGLangShardingManager(BaseShardingManager):
         #         logger.debug("Pre-emptively offloaded drafter before loading actor weights")
         #     except Exception as e:
         #         logger.debug(f"Failed to pre-offload drafter (may already be offloaded): {e}")
+        # FastRL: the engine starts up holding its weights and KV cache, and AsyncEngine only releases them inside the
+        # first resume_memory_occupation, after the actor's parameters are already back on the GPU. With the KV cache
+        # sized for a 44 GB L40S that first wake-up ran out of memory (job 7227378), so release before loading.
+        if (
+            getattr(self.inference_engine, "_need_reload", False)
+            and self.device_mesh["infer_tp"].get_local_rank() == 0
+            and self.rollout_config.free_cache_engine
+        ):
+            await self.inference_engine.release_memory_occupation()
+            self.inference_engine._need_reload = False
+            get_torch_device().empty_cache()
         log_gpu_memory_usage("Before state_dict() in sharding manager memory", logger=logger)
         if self.offload_param:
             load_fsdp_model_to_gpu(self.module)

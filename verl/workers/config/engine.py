@@ -103,3 +103,6 @@ class FSDPEngineConfig(BaseConfig):
     forward_prefetch: bool = False
     model_dtype: str = "fp32"
     use_orig_params: bool = False
+    # Read by fsdp_workers._build_model_optimizer (param/reduce/buffer dtypes; FSDP1 MixedPrecision and FSDP2
+    # MixedPrecisionPolicy). Declared so a config can set it; None keeps bf16 params, fp32 reduce and buffers.
+    mixed_precision: Optional[dict[str, Any]] = None
