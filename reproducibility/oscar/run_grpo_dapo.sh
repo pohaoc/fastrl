@@ -11,12 +11,15 @@ set -euo pipefail
 STEPS=${STEPS:-20}   # SysX DAPO sync ran max_steps = 10; we run 20 (the first 10 compare directly)
 ATTN=${ATTN:-fa3}
 TP=${TP:-1}         # SYNC vllm_tp_size = 1: four single-GPU engines
-# SYNC pins the KV cache at vllm_kv_cache_memory_bytes = 59,223,572,480 B = 451,840 tokens of Llama-8B KV
-# (2 x 32 layers x 8 KV heads x 128 x 2 B = 131,072 B per token); sglang takes it as max_total_tokens. Weights
-# (15.0 GiB) + that KV (55.2 GiB) = 70.1 GiB of an H100's 79.6 GiB; mem_fraction_static 0.92 also covers the SD
-# arm's drafter and draft KV (~2.3 GiB) and leaves ~6 GiB for CUDA graphs and activations.
-KV_TOKENS=${KV_TOKENS:-451840}
-MEM=${MEM:-0.92}
+# DEV: KV cache pinned at 80% of SYNC's, the same in both arms. SYNC pins vllm_kv_cache_memory_bytes =
+# 59,223,572,480 B = 451,840 tokens of Llama-8B KV (2 x 32 layers x 8 KV heads x 128 x 2 B = 131,072 B per token),
+# but weights (15.0 GiB) + that KV (55.2 GiB) leave ~7 GiB of an H100's 79.2 GiB, too little for CUDA graphs, prefill
+# activations and the ~3 GiB the colocated verl worker keeps: at mem 0.92 the SD arm ran out of memory capturing the
+# drafter's graphs and the SD-off arm in its first prefill (job 7283229). 360,448 tokens = 44.0 GiB, passed to
+# sglang as max_total_tokens; mem_fraction_static 0.80 (63.3 GiB) is above weights + drafter + target and draft KV
+# (~61 GiB) in either arm, so the pin sets the pool, and leaves ~16 GiB for graphs, activations and the worker.
+KV_TOKENS=${KV_TOKENS:-360448}
+MEM=${MEM:-0.80}
 MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', revision='6a6f4aa4197940add57724a7707d069478df56b1'))")
 SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-${SCRATCH_ROOT:-/oscar/scratch/$USER}/eagle/DeepSeek-R1-Distill-Llama-8B/drafters/DeepSeek-R1-Distill-Llama-8B-Eagle-dapo}
 export HF_HUB_OFFLINE=1
