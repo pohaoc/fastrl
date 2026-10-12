@@ -5,6 +5,9 @@
 # prompts x 4,096 tokens, then 64 prompts x 4 samples at T 1.0 up to 32,000 tokens (one GPU's share of an RL
 # step). 2 h 45 min cap per engine. Per-iteration scheduler logs in $OUT/steplog_<variant>.
 #   sbatch reproducibility/oscar/dapo_sd_quality.sbatch       (submit from the repo root)
+# gpu-debug (QoS: 1 h, 4 GPUs, 8 CPUs, 96 GB per user), smaller workload and a 55 min cap per engine:
+#   CAP=3300 EXTRA_ARGS="--n_prompts 32 --max_new 16000 --greedy_n 0" sbatch --partition=gpu-debug \
+#     --time=01:00:00 --cpus-per-task=8 --mem=96G reproducibility/oscar/dapo_sd_quality.sbatch
 #SBATCH --job-name=dapo-sd-quality
 #SBATCH --partition=gpu-he
 #SBATCH --gres=gpu:h100:4
@@ -32,9 +35,9 @@ run_on() {  # gpu variant  (own process group, capped)
     local gpu=$1 name=$2
     local fix=1; [ "$name" = sd_rl_nofix ] && fix=0
     FASTRL_TRANSITION_FIX=$fix FASTRL_STEPLOG_DIR=$OUT/steplog_$name CUDA_VISIBLE_DEVICES=$gpu setsid python reproducibility/oscar/dapo_sd_quality.py \
-        --out "$OUT/$name.json" --variant "$name" --model "$MODEL" --drafter "$DRAFTER" > "$OUT/$name.log" 2>&1 &
+        --out "$OUT/$name.json" --variant "$name" --model "$MODEL" --drafter "$DRAFTER" ${EXTRA_ARGS:-} > "$OUT/$name.log" 2>&1 &
     local pid=$!
-    ( sleep 9900; echo "TIMEOUT $name"; kill -TERM -- -$pid; sleep 20; kill -9 -- -$pid ) 2>/dev/null & local dog=$!
+    ( sleep ${CAP:-9900}; echo "TIMEOUT $name"; kill -TERM -- -$pid; sleep 20; kill -9 -- -$pid ) 2>/dev/null & local dog=$!
     wait $pid; local rc=$?
     kill $dog 2>/dev/null; kill -9 -- -$pid 2>/dev/null
     echo "$name exit=$rc $(date +%T)"
