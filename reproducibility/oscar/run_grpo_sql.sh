@@ -5,20 +5,23 @@
 # matches their synchronous configuration, ~/scratch/runs/fresh-sql-sync-8065792/run_config.toml ("SYNC" below).
 # Deviations from examples/grpo_7B.sh are marked "# DEV:".
 # Called by grpo_sql.sbatch / sql_pair.sbatch (env.sh already sourced). Env:
-#   SD=true|false  SPEC_MODEL_PATH=<drafter dir>  STEPS  ATTN (fa3)  TP (1)  MEM (per arm, see below)  OUT  NAME
+#   SD=true|false  SPEC_MODEL_PATH=<drafter dir>  STEPS  ATTN (fa3)  TP (1)  MEM (0.70)  KV_TOKENS (305152)  OUT  NAME
 # Extra arguments are Hydra overrides.
 set -euo pipefail
 : "${SD:?}" "${OUT:?}" "${NAME:?}"
 STEPS=${STEPS:-10}
 ATTN=${ATTN:-fa3}
 TP=${TP:-1}       # SYNC vllm_tp_size = 1: four single-GPU engines
-# DEV: KV cache ~10% below SYNC's. vLLM at vllm_gpu_util 0.9, TP 1 gives 387,184 KV tokens per GPU (SysX rp-sql run
-# log), but in verl's colocated layout the training worker keeps ~2.7 GB on each GPU while the engine generates, and
-# with SYNC's pool the SD arm ran out of memory in its first rollout (job 7283228: engine 41.5 + worker 2.7 of
-# 44.4 GB). sglang's mem_fraction_static counts weights + KV only and sizes the pool differently with and without
-# speculation, so the fraction that gives the same pool differs per arm (sweep job 7226017, TP 1, L40S):
-#   SD off 0.75 -> 346,766 tokens;  SD on 0.70 -> 346,704 tokens (40.4 GB engine peak while generating).
-if [ "$SD" = true ]; then MEM=${MEM:-0.70}; else MEM=${MEM:-0.75}; fi
+# DEV: KV cache pinned at 79% of SYNC's, the same in both arms. vLLM at vllm_gpu_util 0.9, TP 1 gives 387,184 KV
+# tokens per GPU (SysX rp-sql run log). In verl's colocated layout the training worker stays on each GPU while the
+# engine generates (~2.7 GB before the first update, ~4.4 GB after it), and the SD engine needs ~5.5 GB more than
+# SD off for the drafter, its KV and the speculation CUDA graphs. At SYNC's pool the SD arm ran out of memory in
+# its first rollout (job 7283228); at 346.7K tokens, in its second (job 7324391: engine 39.5 + worker 4.4 of
+# 44.4 GB). 305,152 tokens (Qwen2.5-7B: 57,344 B per token) is passed to sglang as max_total_tokens; at
+# mem_fraction_static 0.70 sglang would size the pool at 305,652 (SD off) / 346,704 (SD on) tokens (sweep job
+# 7226017), so the pin sets it in both arms.
+KV_TOKENS=${KV_TOKENS:-305152}
+MEM=${MEM:-0.70}
 MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('Qwen/Qwen2.5-Coder-7B-Instruct', revision='c03e6d358207e414f1eca0bb1891e29f1db0e242'))")
 SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-$(python -c "from huggingface_hub import snapshot_download as s; print(s('mit-han-lab/Qwen2.5-7B-Eagle-RL', revision='38905764986fdd43c64f0b5ab2a0bdac6bf71b08'))")}
 export HF_HUB_OFFLINE=1
@@ -27,7 +30,7 @@ export NCCL_DEBUG=WARN
 export MKL_SERVICE_FORCE_INTEL=1
 export FASTRL_KV_LEAK_WARN=1   # sglang KV leak check logs instead of killing the engine (see scheduler.check_memory)
 mkdir -p "$OUT"
-echo "run=$NAME SD=$SD STEPS=$STEPS ATTN=$ATTN TP=$TP MEM=$MEM drafter=$SPEC_MODEL_PATH out=$OUT start=$(date) overrides: $*"
+echo "run=$NAME SD=$SD STEPS=$STEPS ATTN=$ATTN TP=$TP MEM=$MEM KV_TOKENS=$KV_TOKENS drafter=$SPEC_MODEL_PATH out=$OUT start=$(date) overrides: $*"
 
 DATA_PATH=$DATA_ROOT/SkyRL-SQL                 # reproducibility/sql/prepare_sql.py
 # DEV: dataset/rollout/optimizer = SYNC: 256 prompts x 5, one update per step (mini = batch), lr 1e-6, weight
@@ -94,6 +97,7 @@ python3 -m verl.trainer.main_fastrl \
     actor_rollout_ref.rollout.top_p=0.95 \
     actor_rollout_ref.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
     +actor_rollout_ref.rollout.engine_kwargs.sglang.chunked_prefill_size=8192 \
+    +actor_rollout_ref.rollout.engine_kwargs.sglang.max_total_tokens=$KV_TOKENS \
     actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
     actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=$ATTN \
     +actor_rollout_ref.rollout.skyrl_env.enable=true \
