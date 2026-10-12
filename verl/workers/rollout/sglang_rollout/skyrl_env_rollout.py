@@ -83,6 +83,11 @@ async def run_skyrl_trajectory(
         # vLLM's include_stop_str_in_output (used by the harness) cuts the TEXT right after the stop
         # string; SGLang keeps the whole final token, which may carry trailing characters.
         text = out["text"]
+        # Speculative verification can accept a few tokens past max_new_tokens (job 7324390); keep the turn
+        # at max_generate_length tokens, as without speculation.
+        if len(output_ids) > max_generate_length:
+            output_ids = output_ids[:max_generate_length]
+            text = tokenizer.decode(output_ids, skip_special_tokens=True)
         cuts = [text.find(s) + len(s) for s in stop if s in text]
         if cuts:
             text = text[: min(cuts)]

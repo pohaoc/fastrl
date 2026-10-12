@@ -952,6 +952,15 @@ class SGLangRollout(BaseRollout):
         if self.config.calculate_log_probs:
             rollout_log_probs = out[1].to(idx.device)
 
+        # FastRL: speculative verification can accept a few tokens past max_new_tokens (32,006 of a 32,000-token
+        # limit, job 7324390), which broke the batch concat. Keep the first response_length tokens, which is what
+        # generation without speculation returns.
+        if response.shape[1] > self.config.response_length:
+            logger.warning(f"Clipping responses from {response.shape[1]} to {self.config.response_length} tokens")
+            response = response[:, : self.config.response_length]
+            if rollout_log_probs is not None:
+                rollout_log_probs = rollout_log_probs[:, : self.config.response_length]
+
         if response.shape[1] < self.config.response_length:
             response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
             if self.config.calculate_log_probs:
