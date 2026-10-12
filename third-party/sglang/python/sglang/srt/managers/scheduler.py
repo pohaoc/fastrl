@@ -1773,7 +1773,15 @@ class Scheduler(
 
         if memory_leak:
             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
-            raise ValueError(msg)
+            # FastRL: under KV pressure (retractions) the DAPO rollouts lose ~170 of 327,680 KV slots (jobs
+            # 7306292, 7306674). FASTRL_KV_LEAK_WARN=1 logs it instead of killing the engine; verl flushes
+            # the cache after every rollout, which returns the slots.
+            if os.environ.get("FASTRL_KV_LEAK_WARN", "0") == "1":
+                if msg != getattr(self, "_fastrl_last_leak_msg", None):  # the idle loop re-checks constantly
+                    logger.warning(msg)
+                    self._fastrl_last_leak_msg = msg
+            else:
+                raise ValueError(msg)
 
         if self.disaggregation_mode == DisaggregationMode.DECODE:
             req_total_size = (

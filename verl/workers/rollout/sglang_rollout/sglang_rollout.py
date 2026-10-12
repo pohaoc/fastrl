@@ -202,7 +202,9 @@ def _post_process_outputs(processing_class, output):
             raise ValueError(f"Cannot get tokenizer from processing_class {processing_class}") from e
 
     def _map_each_response(resp):
-        output_token_logprobs = resp["meta_info"]["output_token_logprobs"]
+        output_token_logprobs = resp["meta_info"].get("output_token_logprobs")
+        if output_token_logprobs is None:  # FastRL: requested without logprobs (calculate_log_probs off)
+            return torch.tensor(resp["output_ids"]), torch.zeros(len(resp["output_ids"]))
         log_probs, output_token_ids = zip(
             *[(log_prob, token_ids) for log_prob, token_ids, _ in output_token_logprobs], strict=True
         )
@@ -1127,7 +1129,11 @@ class SGLangRollout(BaseRollout):
         output = await self._engine.async_generate(
             prompt=None,
             sampling_params=request_sampling_params,
-            return_logprob=True,
+            # FastRL: logprobs only when they are used. Requests re-prefilled after a retraction or an SD
+            # transition recompute logprobs over every token generated so far: fp32 logits over a full
+            # 8192-token chunk (3.9 GiB for Llama's vocabulary), which ran the DAPO SD arm out of memory
+            # (jobs 7306292, 7306674). The sampled tokens are the same either way.
+            return_logprob=bool(self.config.calculate_log_probs),
             input_ids=idx_list,
             image_data=image_list,
             return_hidden_states=bool(

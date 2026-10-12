@@ -27,6 +27,7 @@ export HF_HUB_OFFLINE=1
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export MKL_SERVICE_FORCE_INTEL=1
+export FASTRL_KV_LEAK_WARN=1   # sglang KV leak check logs instead of killing the engine (see scheduler.check_memory)
 mkdir -p "$OUT"
 echo "run=$NAME SD=$SD STEPS=$STEPS ATTN=$ATTN TP=$TP MEM=$MEM KV_TOKENS=$KV_TOKENS drafter=$SPEC_MODEL_PATH out=$OUT start=$(date) overrides: $*"
 
