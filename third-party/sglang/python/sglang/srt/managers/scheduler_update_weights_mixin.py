@@ -119,6 +119,10 @@ class SchedulerUpdateWeightsMixin:
             self.stashed_model_static_state = _export_static_state(
                 self.tp_worker.model_runner.model
             )
+            if fastrl_sd_memory.enabled(self.server_args) and hasattr(self.draft_worker, "draft_model_runner"):
+                fastrl_sd_memory.snapshot_drafter(
+                    self.draft_worker.draft_model_runner.model, self.tp_worker.model_runner.model
+                )
             torch.distributed.barrier(self.tp_cpu_group)
             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS)
             if fastrl_sd_memory.enabled(self.server_args):
@@ -148,6 +152,7 @@ class SchedulerUpdateWeightsMixin:
                 if fastrl_sd_memory.graphs_enabled(self.server_args):
                     self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
                 self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS_DRAFTER)
+                fastrl_sd_memory.restore_drafter()
             torch.distributed.barrier(self.tp_cpu_group)
             _import_static_state(
                 self.tp_worker.model_runner.model,
