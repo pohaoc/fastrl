@@ -8,6 +8,9 @@ built like verl's (TP 1, fa3, chunked prefill 8192, KV pinned at 327,680 tokens,
   sd_rl      : the RL SD arm: adaptive (speculate at <= 32 running requests), BEG over the MAB configs
   sd_always  : speculate on every step (no adaptive switch, no re-prefill); max 32 running so CUDA graphs apply
   sd_triton  : sd_rl with the triton attention backend instead of fa3
+  sd_rl_nofix: sd_rl without the switch fix (run with FASTRL_TRANSITION_FIX=0; scheduler.event_loop_normal)
+Job 7329307: off 7,020 tokens / 0% at the limit / score 0.12; sd_always 6,851 / 0% / 0.10; sd_rl 20,166 / 29% / -1.0
+(before the switch fix); sd_triton too slow to finish.
 Two passes:
   1. greedy: --greedy_n prompts one at a time, --greedy_tokens tokens; the summary compares token ids with `off`
   2. sampled: --n_prompts x --n at T 1.0 / top-p 1.0, up to 32,000 tokens, all at once (like one GPU's RL share):
@@ -26,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton"])
+    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix"])
     ap.add_argument("--model", required=True)
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--parquet", default="/oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet")

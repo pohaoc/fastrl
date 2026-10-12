@@ -120,6 +120,18 @@ def get_sharding_strategy(device_mesh):
     return sharding_strategy
 
 
+
+def _fastrl_expandable_segments(enable: bool):
+    """FastRL: PyTorch expandable segments while this worker trains, plain segments while the engine generates
+    (FASTRL_EXPANDABLE_SEGMENTS=1). The SD arm's actor update ran out of memory at step 5 with 4.7 GiB reserved but
+    unusable (fragmented) on a 44 GB L40S (job 7329266). Off for rollout: the weight push shares tensors with the
+    engine over CUDA IPC. Only this process's allocator changes; the engine runs in its own process."""
+    if os.environ.get("FASTRL_EXPANDABLE_SEGMENTS", "0") != "1" or not torch.cuda.is_available():
+        return
+    if not enable:
+        torch.cuda.empty_cache()
+    torch.cuda.memory._set_allocator_settings(f"expandable_segments:{enable}")
+
 class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     """
     This worker can be instantiated as a standalone actor or a standalone rollout or a standalone reference policy
@@ -915,6 +927,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="red", role="actor_update")
     def update_actor(self, data: DataProto):
+        _fastrl_expandable_segments(True)
         assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -958,6 +971,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="rollout"))
     @DistProfiler.annotate(color="red", role="rollout_generate")
     def generate_sequences(self, prompts: DataProto):
+        _fastrl_expandable_segments(False)
         # Support all hardwares
         prompts = prompts.to(get_device_id())
 
@@ -1001,6 +1015,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="blue", role="actor_compute_log_prob")
     def compute_log_prob(self, data: DataProto):
+        _fastrl_expandable_segments(True)
         # when is_lora is True, we use the actor without lora applied to calculate the log_prob
         # which is mostly used for ref log_prob calculation
         assert self._is_actor
@@ -1056,6 +1071,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="olive", role="ref_compute_log_prob")
     def compute_ref_log_prob(self, data: DataProto):
+        _fastrl_expandable_segments(True)
         if self._is_lora:
             # if _is_lora, actor without lora applied is the ref
             data.meta_info["is_lora"] = True

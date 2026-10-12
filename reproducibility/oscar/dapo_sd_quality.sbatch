@@ -1,8 +1,9 @@
 #!/bin/bash
 # Does speculative decoding change DeepSeek-R1-Distill-Llama-8B's DAPO outputs? (see dapo_sd_quality.py)
-# Four single-GPU engines side by side, same prompts: off, sd_rl (as in RL), sd_always (no adaptive switch),
-# sd_triton (sd_rl on the triton attention backend). Each: 8 greedy prompts x 4,096 tokens, then 64 prompts x 4
-# samples at T 1.0 up to 32,000 tokens (one GPU's share of an RL step). 2 h 45 min cap per engine.
+# Four single-GPU engines side by side, same prompts: off, sd_rl (as in RL, with the switch fix), sd_always (no
+# adaptive switch), sd_rl_nofix (FASTRL_TRANSITION_FIX=0). VARIANTS overrides the list (one per GPU). Each: 8 greedy
+# prompts x 4,096 tokens, then 64 prompts x 4 samples at T 1.0 up to 32,000 tokens (one GPU's share of an RL
+# step). 2 h 45 min cap per engine. Per-iteration scheduler logs in $OUT/steplog_<variant>.
 #   sbatch reproducibility/oscar/dapo_sd_quality.sbatch       (submit from the repo root)
 #SBATCH --job-name=dapo-sd-quality
 #SBATCH --partition=gpu-he
@@ -29,7 +30,8 @@ export HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=true
 
 run_on() {  # gpu variant  (own process group, capped)
     local gpu=$1 name=$2
-    CUDA_VISIBLE_DEVICES=$gpu setsid python reproducibility/oscar/dapo_sd_quality.py \
+    local fix=1; [ "$name" = sd_rl_nofix ] && fix=0
+    FASTRL_TRANSITION_FIX=$fix FASTRL_STEPLOG_DIR=$OUT/steplog_$name CUDA_VISIBLE_DEVICES=$gpu setsid python reproducibility/oscar/dapo_sd_quality.py \
         --out "$OUT/$name.json" --variant "$name" --model "$MODEL" --drafter "$DRAFTER" > "$OUT/$name.log" 2>&1 &
     local pid=$!
     ( sleep 9900; echo "TIMEOUT $name"; kill -TERM -- -$pid; sleep 20; kill -9 -- -$pid ) 2>/dev/null & local dog=$!
@@ -37,10 +39,8 @@ run_on() {  # gpu variant  (own process group, capped)
     kill $dog 2>/dev/null; kill -9 -- -$pid 2>/dev/null
     echo "$name exit=$rc $(date +%T)"
 }
-run_on 0 off &
-run_on 1 sd_rl &
-run_on 2 sd_always &
-run_on 3 sd_triton &
+VARIANTS=(${VARIANTS:-off sd_rl sd_always sd_rl_nofix})
+for i in "${!VARIANTS[@]}"; do run_on "$i" "${VARIANTS[$i]}" & done
 wait
 
 echo; echo "=================== SUMMARY"
@@ -48,13 +48,14 @@ python - "$OUT" <<'EOF'
 import json, os, sys
 d = sys.argv[1]
 res = {}
-for v in ("off", "sd_rl", "sd_always", "sd_triton"):
+for v in ("off", "sd_rl", "sd_always", "sd_rl_nofix", "sd_triton"):
     p = os.path.join(d, v + ".json")
-    res[v] = json.load(open(p)) if os.path.exists(p) else {}
+    if os.path.exists(p):
+        res[v] = json.load(open(p))
 print("sampled (64 prompts x 4, T 1.0, <= 32,000 tokens):")
 for v, r in res.items():
     print(f"  {v:10s} phase={r.get('phase')} {r.get('summary')}")
-ref = res["off"].get("greedy") or []
+ref = res.get("off", {}).get("greedy") or []
 print("greedy (8 prompts, 4,096 tokens): index of the first token that differs from `off` (None = identical)")
 for v, r in res.items():
     g = r.get("greedy") or []

@@ -1031,10 +1031,23 @@ class Scheduler(
                     reqs_to_requeue = []
                     if self.running_batch and not self.running_batch.is_empty():
                         reqs_to_requeue.extend(self.running_batch.reqs)
+                    # FastRL fix: a request in the middle of a chunked prefill is in neither queue. Left alone,
+                    # the next get_next_batch_to_run caches its stale KV slots (just returned to the cleared
+                    # allocator) into the fresh prefix tree; other requests then get those slots, and requests
+                    # sharing its prompt read KV that others overwrite. On DAPO (8 samples per prompt, switch
+                    # under KV pressure with a queue) every SD response came out garbage (dapo_sd_quality
+                    # 7329307: score -1.0 vs 0.12, 29% at the 32K limit). Requeue it like the running requests.
+                    transition_fix = os.environ.get("FASTRL_TRANSITION_FIX", "1") == "1"
+                    if transition_fix and self.chunked_req is not None:
+                        reqs_to_requeue.append(self.chunked_req)
+                        self.chunked_req = None
 
                     # Reset all requests in all queues
                     all_reqs = reqs_to_requeue + self.waiting_queue + self.grammar_queue
                     for req in all_reqs:
+                        if transition_fix:
+                            # Everything a retraction resets (chunk counter, computed-token and logprob state)
+                            req.reset_for_retract()
                         req.fill_ids = []
                         req.extend_input_len = 0
                         req.prefix_indices = []
