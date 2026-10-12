@@ -9,6 +9,12 @@ built like verl's (TP 1, fa3, chunked prefill 8192, KV pinned at 327,680 tokens,
   sd_always  : speculate on every step (no adaptive switch, no re-prefill); max 32 running so CUDA graphs apply
   sd_triton  : sd_rl with the triton attention backend instead of fa3
   sd_rl_nofix: sd_rl without the switch fix (run with FASTRL_TRANSITION_FIX=0; scheduler.event_loop_normal)
+  sd_always_64 / sd_always_256: speculate on every step with up to 64 / 256 running requests (CUDA graphs cover
+               <= 32, larger batches run eagerly)
+  sd_eager_32: speculate on every step, <= 32 running, CUDA graphs off (the eager path at small batch sizes)
+Job 7333364 showed the switch fires once, at the first greedy request, and SD then stays on for good: the sampled
+pass speculated at up to 256 running requests, as the RL SD arm did after its switch (bs > 32 in 31K of 262K SD
+decode steps, job 7324390). sd_always (<= 32) and SQL (never above 32) were fine.
 Job 7329307: off 7,020 tokens / 0% at the limit / score 0.12; sd_always 6,851 / 0% / 0.10; sd_rl 20,166 / 29% / -1.0
 (before the switch fix); sd_triton too slow to finish.
 Two passes:
@@ -29,7 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix"])
+    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix", "sd_always_64", "sd_always_256", "sd_eager_32"])
     ap.add_argument("--model", required=True)
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--parquet", default="/oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet")
@@ -65,6 +71,10 @@ def main():
                   speculative_mab_bs_threshold=[1, 2, 5, 21], cuda_graph_max_bs=32, disable_overlap_schedule=True)
     if args.variant == "sd_always":
         kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=32)
+    if args.variant in ("sd_always_64", "sd_always_256"):
+        kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=int(args.variant.split("_")[-1]))
+    if args.variant == "sd_eager_32":
+        kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=32, disable_cuda_graph=True)
     if args.variant == "sd_triton":
         kw.update(attention_backend="triton")
 

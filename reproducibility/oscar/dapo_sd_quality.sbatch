@@ -48,7 +48,7 @@ python - "$OUT" <<'EOF'
 import json, os, sys
 d = sys.argv[1]
 res = {}
-for v in ("off", "sd_rl", "sd_always", "sd_rl_nofix", "sd_triton"):
+for v in ("off", "sd_rl", "sd_always", "sd_rl_nofix", "sd_triton", "sd_always_64", "sd_always_256", "sd_eager_32"):
     p = os.path.join(d, v + ".json")
     if os.path.exists(p):
         res[v] = json.load(open(p))
