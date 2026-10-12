@@ -2227,6 +2227,11 @@ class Scheduler(
                 f"#new_token_ratio: {old_ratio:.4f} -> {new_token_ratio:.4f}"
             )
 
+            if steplog.enabled and self.tp_rank == 0:
+                # KV pool full: requests pushed back to the queue (and re-prefilled later)
+                steplog.record({"event": "retract", "t0": steplog_now(), "bs": initial_bs,
+                                "retracted": len(retracted_reqs), "aborted": len(reqs_to_abort),
+                                "sd_on": bool(getattr(self.draft_worker, "adaptive_spec_enabled", False))})
             for req in retracted_reqs:
                 self._add_request_to_queue(req, is_retracted=True)
         else:
