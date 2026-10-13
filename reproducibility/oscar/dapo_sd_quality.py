@@ -12,6 +12,12 @@ built like verl's (TP 1, fa3, chunked prefill 8192, KV pinned at 327,680 tokens,
   sd_always_64 / sd_always_256: speculate on every step with up to 64 / 256 running requests (CUDA graphs cover
                <= 32, larger batches run eagerly)
   sd_eager_32: speculate on every step, <= 32 running, CUDA graphs off (the eager path at small batch sizes)
+  sd_rl_nograph: sd_rl with CUDA graphs off (no extra "normal decode" graphs/attention backend in adaptive mode)
+  sd_never   : adaptive mode that never switches (threshold 0): plain decode inside the EAGLE engine throughout
+  sd_rl_t1000: adaptive, threshold 1000: switches after the first 10 decode steps, requeueing every running request
+Job 7334995 (gpu-debug, 32 prompts x 4, <= 16K tokens): off, sd_always_64, sd_always_256 (SD at > 64 running, 21
+retractions) and sd_eager_32 were all clean, so neither batch size, retraction nor the eager path breaks SD; only
+the adaptive mode does.
 Job 7333364 showed the switch fires once, at the first greedy request, and SD then stays on for good: the sampled
 pass speculated at up to 256 running requests, as the RL SD arm did after its switch (bs > 32 in 31K of 262K SD
 decode steps, job 7324390). sd_always (<= 32) and SQL (never above 32) were fine.
@@ -35,7 +41,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix", "sd_always_64", "sd_always_256", "sd_eager_32"])
+    ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix", "sd_always_64", "sd_always_256", "sd_eager_32",
+                                                         "sd_rl_nograph", "sd_never", "sd_rl_t1000"])
     ap.add_argument("--model", required=True)
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--parquet", default="/oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet")
@@ -73,6 +80,12 @@ def main():
         kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=32)
     if args.variant in ("sd_always_64", "sd_always_256"):
         kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=int(args.variant.split("_")[-1]))
+    if args.variant == "sd_rl_nograph":
+        kw.update(disable_cuda_graph=True)
+    if args.variant == "sd_never":
+        kw.update(apdative_speculative_batch_size_threshold=0)
+    if args.variant == "sd_rl_t1000":
+        kw.update(apdative_speculative_batch_size_threshold=1000)
     if args.variant == "sd_eager_32":
         kw.update(apdative_speculative_batch_size_threshold=None, max_running_requests=32, disable_cuda_graph=True)
     if args.variant == "sd_triton":
