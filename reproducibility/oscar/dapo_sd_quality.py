@@ -15,6 +15,10 @@ built like verl's (TP 1, fa3, chunked prefill 8192, KV pinned at 327,680 tokens,
   sd_rl_nograph: sd_rl with CUDA graphs off (no extra "normal decode" graphs/attention backend in adaptive mode)
   sd_never   : adaptive mode that never switches (threshold 0): plain decode inside the EAGLE engine throughout
   sd_rl_t1000: adaptive, threshold 1000: switches after the first 10 decode steps, requeueing every running request
+  sd_rl_noprepfix: sd_rl with upstream's decode preparation (run with FASTRL_PREP_FIX=0; scheduler.update_running_batch)
+Job 7351369 (greedy pass first): sd_rl and sd_rl_nograph garbage (score -1.0), sd_rl_t1000 and sd_always clean: once
+adaptive SD is on, upstream prepared every batch above the threshold as a plain decode step while the worker
+speculated on it.
 Job 7334995 (gpu-debug, 32 prompts x 4, <= 16K tokens): off, sd_always_64, sd_always_256 (SD at > 64 running, 21
 retractions) and sd_eager_32 were all clean, so neither batch size, retraction nor the eager path breaks SD; only
 the adaptive mode does.
@@ -42,7 +46,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--variant", required=True, choices=["off", "sd_rl", "sd_always", "sd_triton", "sd_rl_nofix", "sd_always_64", "sd_always_256", "sd_eager_32",
-                                                         "sd_rl_nograph", "sd_never", "sd_rl_t1000"])
+                                                         "sd_rl_nograph", "sd_never", "sd_rl_t1000", "sd_rl_noprepfix"])
     ap.add_argument("--model", required=True)
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--parquet", default="/oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet")

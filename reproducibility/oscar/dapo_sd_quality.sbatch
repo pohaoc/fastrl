@@ -34,7 +34,8 @@ export HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=true
 run_on() {  # gpu variant  (own process group, capped)
     local gpu=$1 name=$2
     local fix=1; [ "$name" = sd_rl_nofix ] && fix=0
-    FASTRL_TRANSITION_FIX=$fix FASTRL_STEPLOG_DIR=$OUT/steplog_$name CUDA_VISIBLE_DEVICES=$gpu setsid python reproducibility/oscar/dapo_sd_quality.py \
+    local prep=1; [ "$name" = sd_rl_noprepfix ] && prep=0
+    FASTRL_PREP_FIX=$prep FASTRL_TRANSITION_FIX=$fix FASTRL_STEPLOG_DIR=$OUT/steplog_$name CUDA_VISIBLE_DEVICES=$gpu setsid python reproducibility/oscar/dapo_sd_quality.py \
         --out "$OUT/$name.json" --variant "$name" --model "$MODEL" --drafter "$DRAFTER" ${EXTRA_ARGS:-} > "$OUT/$name.log" 2>&1 &
     local pid=$!
     ( sleep ${CAP:-9900}; echo "TIMEOUT $name"; kill -TERM -- -$pid; sleep 20; kill -9 -- -$pid ) 2>/dev/null & local dog=$!
@@ -52,7 +53,7 @@ import json, os, sys
 d = sys.argv[1]
 res = {}
 for v in ("off", "sd_rl", "sd_always", "sd_rl_nofix", "sd_triton", "sd_always_64", "sd_always_256", "sd_eager_32",
-          "sd_rl_nograph", "sd_never", "sd_rl_t1000"):
+          "sd_rl_nograph", "sd_never", "sd_rl_t1000", "sd_rl_noprepfix"):
     p = os.path.join(d, v + ".json")
     if os.path.exists(p):
         res[v] = json.load(open(p))

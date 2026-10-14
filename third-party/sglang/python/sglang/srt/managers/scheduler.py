@@ -2250,10 +2250,16 @@ class Scheduler(
         sd_inactive = self.draft_worker is not None and not getattr(
             self.draft_worker, "adaptive_spec_enabled", True
         )
+        # FastRL fix: prepare a plain decode step only when the EAGLE worker will run one. Upstream also did so
+        # for every batch above the threshold, but once adaptive SD is enabled the worker speculates at any
+        # batch size, so a batch that grew back above the threshold (DAPO: KV-bound, queue still long) got a
+        # speculative step on plain-decode bookkeeping and every response turned to garbage (dapo_sd_quality
+        # 7351369: score -1.0 at threshold 32, 0.17 at threshold 1000). FASTRL_PREP_FIX=0 = upstream.
+        prep_fix = os.environ.get("FASTRL_PREP_FIX", "1") == "1"
         if (
             self.adaptive_spec_threshold is not None
             and self.adaptive_spec_threshold > 0
-            and (batch.batch_size() > self.adaptive_spec_threshold or sd_inactive)
+            and (sd_inactive if prep_fix else (batch.batch_size() > self.adaptive_spec_threshold or sd_inactive))
         ):
             self.running_batch.spec_algorithm = SpeculativeAlgorithm.NONE
         batch.prepare_for_decode(skip_prepare=not self.running_batch.spec_algorithm.is_none())
