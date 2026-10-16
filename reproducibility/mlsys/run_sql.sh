@@ -1,39 +1,59 @@
 #!/bin/bash
-# GRPO on SkyRL-SQL-653 with Qwen2.5-Coder-7B-Instruct on 4x L40S, following examples/grpo_7B.sh.
-# Rollout = the SkyRL-gym text2sql agent loop of granular-cais-rl (use_conversation_multi_turn=False,
-# see verl/workers/rollout/sglang_rollout/skyrl_env_rollout.py). Every parameter shared with the SysX SQL runs
-# matches their synchronous configuration, ~/scratch/runs/fresh-sql-sync-8065792/run_config.toml ("SYNC" below).
-# Deviations from examples/grpo_7B.sh are marked "# DEV:".
-# Called by grpo_sql.sbatch / sql_pair.sbatch (env.sh already sourced). Env:
-#   SD=true|false  SPEC_MODEL_PATH=<drafter dir>  STEPS  ATTN (fa3)  TP (1)  MEM (0.70)  KV_TOKENS (305152)  OUT  NAME
+# One arm of the TLT (FastRL) SkyRL-SQL experiment: GRPO on SkyRL-SQL-653 with Qwen2.5-Coder-7B-Instruct, with or
+# without FastRL's adaptive speculative decoding. Use sql_sd_on.sh / sql_sd_off.sh (they set SD and NAME).
+# Settings are those of our runs (job 7333365, 4x L40S); every parameter shared with the SysX SQL runs matches their
+# synchronous configuration ("SYNC" below). Deviations from upstream FastRL's examples/grpo_7B.sh are marked "# DEV:".
+# All changes to FastRL itself are listed in CHANGES.md.
+#
+# Required env:
+#   SD=true|false                 speculative decoding on / off
+#   NAME                          run name (trainer.experiment_name)
+#   OUT                           output directory (logs, per-iteration engine logs in $OUT/steplog)
+#   DATA_PATH                     SkyRL-SQL directory from reproducibility/sql/prepare_sql.py (train.parquet,
+#                                 validation.parquet, db/data)
+#   SPEC_MODEL_PATH               drafter directory (SD=true only; config.json + pytorch_model.bin)
+# Optional env:
+#   MODEL_PATH                    target model directory (default: HF Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d3)
+#   STEPS (35)  N_GPUS (4)  NUM_CPUS (nproc)  ATTN (fa3)  TP (1)  MEM (0.70)  KV_TOKENS (305152)
 # Extra arguments are Hydra overrides.
 set -euo pipefail
-: "${SD:?}" "${OUT:?}" "${NAME:?}"
-STEPS=${STEPS:-10}
+: "${SD:?}" "${OUT:?}" "${NAME:?}" "${DATA_PATH:?set DATA_PATH to the prepare_sql.py output}"
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# Import verl and sglang from this checkout (works whether or not they are installed editable from it).
+export PYTHONPATH=$REPO:$REPO/third-party/sglang/python${PYTHONPATH:+:$PYTHONPATH}
+STEPS=${STEPS:-35}
+N_GPUS=${N_GPUS:-4}
+NUM_CPUS=${NUM_CPUS:-$(nproc)}
 ATTN=${ATTN:-fa3}
-TP=${TP:-1}       # SYNC vllm_tp_size = 1: four single-GPU engines
-# DEV: KV cache pinned at 79% of SYNC's, the same in both arms. vLLM at vllm_gpu_util 0.9, TP 1 gives 387,184 KV
-# tokens per GPU (SysX rp-sql run log). In verl's colocated layout the training worker stays on each GPU while the
-# engine generates (~2.7 GB before the first update, ~4.4 GB after it), and the SD engine needs ~5.5 GB more than
-# SD off for the drafter, its KV and the speculation CUDA graphs. At SYNC's pool the SD arm ran out of memory in
-# its first rollout (job 7283228); at 346.7K tokens, in its second (job 7324391: engine 39.5 + worker 4.4 of
-# 44.4 GB). 305,152 tokens (Qwen2.5-7B: 57,344 B per token) is passed to sglang as max_total_tokens; at
-# mem_fraction_static 0.70 sglang would size the pool at 305,652 (SD off) / 346,704 (SD on) tokens (sweep job
-# 7226017), so the pin sets it in both arms.
+TP=${TP:-1}       # SYNC vllm_tp_size = 1: one single-GPU engine per GPU
+# DEV: KV cache pinned at 305,152 tokens per GPU in both arms (79% of SYNC's 387,184; Qwen2.5-7B: 57,344 B per
+# token), passed to sglang as max_total_tokens. On 44 GB L40S this was the largest pool both arms fit (the colocated
+# verl worker keeps ~2.7-4.4 GB per GPU while generating; the SD engine needs ~5.5 GB more than SD off). Keep it on
+# larger GPUs so the KV cache, and with it batching and retraction behaviour, matches our runs. mem_fraction_static
+# only has to cover weights + the pinned pool; at 0.70 the pin binds in both arms.
 KV_TOKENS=${KV_TOKENS:-305152}
 MEM=${MEM:-0.70}
-MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('Qwen/Qwen2.5-Coder-7B-Instruct', revision='c03e6d358207e414f1eca0bb1891e29f1db0e242'))")
-SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-$(python -c "from huggingface_hub import snapshot_download as s; print(s('mit-han-lab/Qwen2.5-7B-Eagle-RL', revision='38905764986fdd43c64f0b5ab2a0bdac6bf71b08'))")}
-export HF_HUB_OFFLINE=1
+if [ -z "${MODEL_PATH:-}" ]; then
+    MODEL_PATH=$(python -c "from huggingface_hub import snapshot_download as s; print(s('Qwen/Qwen2.5-Coder-7B-Instruct', revision='c03e6d358207e414f1eca0bb1891e29f1db0e242'))")
+fi
+if [ "$SD" = true ]; then
+    : "${SPEC_MODEL_PATH:?SD=true needs SPEC_MODEL_PATH (the drafter directory)}"
+else
+    SPEC_MODEL_PATH=${SPEC_MODEL_PATH:-none}   # unused when SD=false
+fi
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export MKL_SERVICE_FORCE_INTEL=1
-export FASTRL_KV_LEAK_WARN=1   # sglang KV leak check logs instead of killing the engine (see scheduler.check_memory)
-export FASTRL_EXPANDABLE_SEGMENTS=1  # expandable segments while the verl worker trains (fsdp_workers._fastrl_expandable_segments)
-mkdir -p "$OUT"
-echo "run=$NAME SD=$SD STEPS=$STEPS ATTN=$ATTN TP=$TP MEM=$MEM KV_TOKENS=$KV_TOKENS drafter=$SPEC_MODEL_PATH out=$OUT start=$(date) overrides: $*"
+export PYTHONUNBUFFERED=1          # print verl's per-step metrics as they happen, not only at exit
+export FASTRL_KV_LEAK_WARN=1        # sglang KV leak check logs instead of killing the engine (CHANGES.md)
+export FASTRL_EXPANDABLE_SEGMENTS=1 # expandable segments while the verl worker trains (CHANGES.md)
+export FASTRL_STEPLOG_DIR=${FASTRL_STEPLOG_DIR:-$OUT/steplog}   # per-iteration engine log (analyze_pair.py)
+# 2048 SkyRL env workers (the SYNC setting) exceed the default soft thread limit with Ray/SGLang/torch threads.
+ulimit -u "$(ulimit -Hu)" 2>/dev/null || true
+mkdir -p "$OUT" "$FASTRL_STEPLOG_DIR"
+echo "run=$NAME SD=$SD STEPS=$STEPS N_GPUS=$N_GPUS ATTN=$ATTN TP=$TP MEM=$MEM KV_TOKENS=$KV_TOKENS model=$MODEL_PATH drafter=$SPEC_MODEL_PATH data=$DATA_PATH out=$OUT commit=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo ?) start=$(date) overrides: $*"
+cd "$REPO"
 
-DATA_PATH=$DATA_ROOT/SkyRL-SQL                 # reproducibility/sql/prepare_sql.py
 # DEV: dataset/rollout/optimizer = SYNC: 256 prompts x 5, one update per step (mini = batch), lr 1e-6, weight
 # decay 0.01 (verl default), grad clip 0.5, constant LR without warmup, no KL loss, no entropy term, no zero-signal
 # filter, std-normalized GRPO advantages, T 0.6 / top-p 0.95 / top-k -1, <=5 turns of <=3000 tokens, 4096-token
@@ -115,20 +135,20 @@ python3 -m verl.trainer.main_fastrl \
     trainer.logger="['console']" \
     trainer.project_name=FastRL-SQL \
     trainer.experiment_name=$NAME \
-    trainer.default_local_dir=$OUT/ckpt \
+    trainer.default_local_dir=$OUT/ckpt-$NAME \
     trainer.val_before_train=False \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=$N_GPUS \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \
     trainer.test_freq=-1 \
     trainer.total_epochs=100 \
     trainer.total_training_steps=$STEPS \
-    ray_init.num_cpus=${SLURM_CPUS_PER_TASK:?} \
+    ray_init.num_cpus=$NUM_CPUS \
     "$@"
 # DEV (lines above): skyrl_env.* (SQL agent loop, SYNC environment settings; 2048 env workers need the raised
-# thread limit in sql_pair.sbatch), chunked_prefill_size 8192 = SYNC vllm_max_num_batched_tokens, engine attention
+# thread limit set above), chunked_prefill_size 8192 = SYNC vllm_max_num_batched_tokens, engine attention
 # backend (verl forces fa3 when unset, so fa3 == upstream), n_gpus_per_node 8 -> 4, save_freq -1,
-# total_training_steps, Oscar ray_init.num_cpus. Speculation settings (FastRL defaults) are TLT's own.
+# total_training_steps, ray_init.num_cpus. Speculation settings (FastRL defaults) are TLT's own.
 # multi_stage_wake_up: push the new weights before re-allocating the KV cache, so the actor's parameters and the
 # KV cache are never on the GPU together (without it both SQL arms ran out of memory in the first wake-up, job 7227378).
 # nccl_timeout 600 -> 7200 s: with TP 1 every GPU waits at a barrier for the slowest GPU's rollout, and one SD-arm
