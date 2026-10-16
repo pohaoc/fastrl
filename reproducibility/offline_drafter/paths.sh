@@ -51,8 +51,11 @@ case $DATASET:$TARGET in
     # token, ~165K tokens per L40S at mem 0.85, and 16 x (8192 + 1024) fits without retraction.
     NUM_PROMPTS=${NUM_PROMPTS:-2000}; GEN_MAX_NEW=${GEN_MAX_NEW:-8192}
     GEN_ARGS="--dapo_parquet /oscar/data/deeptir/mborjigi/datasets/dapo_math17k/train.parquet --max_prompt_tokens 1024"
-    GEN_ARGS="$GEN_ARGS --num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-1.0} --top_p ${GEN_TOP_P:-1.0} --max_running 16"
-    MAX_K=8; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
+    # v2 (2026-10-16, on H100): NUM_PROMPTS=6000 GEN_MAX_NEW=32000 GEN_MAX_RUNNING=32 MAX_K=16. The 8K v1 drafter
+    # (top-1 0.68, 36% of its rollouts cut at 8K) accepted ~1.96 tokens per verify step in DAPO, slower than
+    # plain decoding. 16K windows need H100: 16K x 128,256-vocab fp32 loss tensors OOM a 44 GB L40S.
+    GEN_ARGS="$GEN_ARGS --num_prompts $NUM_PROMPTS --max_new_tokens $GEN_MAX_NEW --temperature ${GEN_TEMP:-1.0} --top_p ${GEN_TOP_P:-1.0} --max_running ${GEN_MAX_RUNNING:-16}"
+    MAX_K=${MAX_K:-8}; MICRO=1; ACCUM=4; EPOCHS=${EPOCHS:-10}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-} ;;
   dapo:*)
     GEN_ARGS="${GEN_ARGS:-}"
     MAX_K=4;  MICRO=2; ACCUM=2; EPOCHS=${EPOCHS:-5}; TRAIN_MAX_LEN=${TRAIN_MAX_LEN:-}  ;;   # ~9k sequences <=4K tokens
